@@ -315,7 +315,6 @@ impl eframe::App for Launcher {
                     _ => {
                         ui.colored_label(theme::TEXT_SECONDARY, "No releases on this channel yet.");
                     }
-                    _ => {}
                 },
             }
 
