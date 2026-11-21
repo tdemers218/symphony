@@ -294,10 +294,25 @@ impl eframe::App for Launcher {
                             self.start_install(&ctx, rel.clone());
                         }
                     }
-                    _ if self.error.is_none() && !self.releases.is_empty() => {
+                    _ if self.error.is_some() => {}
+                    _ if !installed.is_empty() => {
                         ui.colored_label(theme::TEXT_SECONDARY, "You have the newest version.");
                     }
-                    _ if self.error.is_none() => {
+                    // Nothing installed and nothing on Stable yet: point testers
+                    // at Preview instead of a dead end (DESIGN §17).
+                    _ if self.state.channel == Channel::Stable
+                        && release::newest(&self.releases, Channel::Preview).is_some() =>
+                    {
+                        ui.colored_label(
+                            theme::TEXT_SECONDARY,
+                            "There's no stable release yet. Testers can install the preview.",
+                        );
+                        if primary(ui, "Switch to Preview (for testers)", true) {
+                            self.state.channel = Channel::Preview;
+                            self.save();
+                        }
+                    }
+                    _ => {
                         ui.colored_label(theme::TEXT_SECONDARY, "No releases on this channel yet.");
                     }
                     _ => {}
