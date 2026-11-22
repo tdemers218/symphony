@@ -11,6 +11,18 @@ pub fn window_icon() -> eframe::egui::IconData {
     }
 }
 
+pub fn texture(ctx: &eframe::egui::Context) -> eframe::egui::TextureHandle {
+    let icon = window_icon();
+    ctx.load_texture(
+        "Symphony brush mark",
+        eframe::egui::ColorImage::from_rgba_unmultiplied(
+            [icon.width as usize, icon.height as usize],
+            &icon.rgba,
+        ),
+        eframe::egui::TextureOptions::LINEAR,
+    )
+}
+
 #[cfg(target_os = "macos")]
 pub fn set_dock_icon() {
     use objc2::MainThreadMarker;

@@ -4,7 +4,7 @@ use std::{
     sync::mpsc::{self, Receiver, TryRecvError},
 };
 
-use eframe::egui::{self, Align2, Margin, Sense, Vec2};
+use eframe::egui::{self, Margin, Sense, Vec2};
 use symphony_core::doc::{Scene, Settings};
 use symphony_ui::{feedback, theme, widgets};
 
@@ -26,6 +26,7 @@ pub struct Welcome {
     pending: Option<Receiver<CreatedScene>>,
     error: Option<String>,
     can_cancel: bool,
+    mark: Option<egui::TextureHandle>,
 }
 
 impl Welcome {
@@ -37,6 +38,7 @@ impl Welcome {
             pending: None,
             error: None,
             can_cancel,
+            mark: None,
         }
     }
 
@@ -79,17 +81,21 @@ impl Welcome {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
         }
+        let mark = self
+            .mark
+            .get_or_insert_with(|| crate::app_icon::texture(ui.ctx()))
+            .id();
         let backdrop = ui.max_rect();
-        // The banner is the wallpaper. Keep its caption behind the setup card.
-        ui.painter().text(
-            egui::pos2(
-                backdrop.left() + backdrop.width() * 0.75,
-                backdrop.center().y,
-            ),
-            Align2::CENTER_CENTER,
-            "Waiting for artists",
-            egui::FontId::proportional(19.0),
-            theme::TEXT_SECONDARY,
+        let art_size = (backdrop.height() * 0.55).min(backdrop.width() * 0.36);
+        let art_center = egui::pos2(
+            backdrop.left() + backdrop.width() * 0.75,
+            backdrop.center().y,
+        );
+        ui.painter().image(
+            mark,
+            egui::Rect::from_center_size(art_center, Vec2::splat(art_size)),
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE.gamma_multiply(0.72),
         );
         let busy = preparing || opening || self.pending.is_some();
         let mut action = None;
@@ -101,7 +107,23 @@ impl Welcome {
                 ui.vertical(|ui| {
                     ui.set_width(width);
                     ui.add_space(48.0);
-                    ui.label(egui::RichText::new("Symphony").font(theme::wordmark()));
+                    ui.horizontal_centered(|ui| {
+                        ui.spacing_mut().item_spacing.x = 1.0;
+                        ui.vertical(|ui| {
+                            // Align the bottom of the brush mark with the type baseline.
+                            ui.add_space(10.0);
+                            let image = egui::load::SizedTexture::new(mark, Vec2::new(31.0, 36.0));
+                            ui.add(
+                                egui::Image::new(image)
+                                    .uv(egui::Rect::from_min_max(
+                                        egui::pos2(0.16, 0.11),
+                                        egui::pos2(0.84, 0.89),
+                                    ))
+                                    .alt_text("S"),
+                            );
+                        });
+                        ui.label(egui::RichText::new("ymphony").font(theme::wordmark()));
+                    });
                     ui.add_space(16.0);
                     ui.horizontal_top(|ui| {
                         let form_width = width * 0.53;
