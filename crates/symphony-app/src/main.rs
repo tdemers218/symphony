@@ -7,6 +7,7 @@ mod brush_import;
 mod codec;
 mod keymap;
 mod presets;
+mod save_dialog;
 mod session;
 mod shot;
 #[cfg(test)]
@@ -114,6 +115,7 @@ type SaveResult = (u64, PathBuf, Result<(), String>);
 type RecoveredScene = (String, Option<PathBuf>, Scene);
 
 struct SymphonyApp {
+    save_dialog: Option<(save_dialog::SaveDialog, Option<Pending>)>,
     welcome: Option<welcome::Welcome>,
     recent_projects: Vec<PathBuf>,
     recovery_scan: Option<Receiver<Vec<RecoveredScene>>>,
@@ -188,6 +190,14 @@ fn tool_action(t: Tool) -> Action {
         Tool::Hand => Action::ToolHand,
         Tool::Zoom => Action::ToolZoom,
     }
+}
+
+fn save_project(scene: &Scene, path: &std::path::Path, create: bool) -> Result<(), String> {
+    if create {
+        std::fs::create_dir(path)
+            .map_err(|e| format!("Couldn’t create the project folder ({e})."))?;
+    }
+    symphony_io::save(scene, path).map_err(|e| e.0)
 }
 
 fn recovery_dir() -> Option<PathBuf> {
@@ -317,6 +327,12 @@ impl SymphonyApp {
         let (save_tx, save_rx) = channel();
         let version = s.doc.version;
         SymphonyApp {
+            save_dialog: std::env::var_os("SYMPHONY_SHOT_SAVE").map(|_| {
+                (
+                    save_dialog::SaveDialog::new("Untitled scene".into(), None),
+                    None,
+                )
+            }),
             welcome,
             recent_projects,
             recovery_scan,
@@ -521,37 +537,34 @@ impl SymphonyApp {
         }
     }
 
-    fn ask_save_path(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_title("Save scene")
-            .set_file_name(format!("{}.symphony", self.s.name()))
-            .save_file()
-            .map(|p| symphony_io::with_extension(&p))
+    fn show_save_dialog(&mut self, next: Option<Pending>) {
+        self.save_dialog = Some((
+            save_dialog::SaveDialog::new(self.s.name(), self.s.path.as_deref()),
+            next,
+        ));
     }
 
     fn save(&mut self, save_as: bool) {
-        let path = match (&self.s.path, save_as) {
-            (Some(p), false) => p.clone(),
-            _ => match self.ask_save_path() {
-                Some(p) => p,
-                None => return,
-            },
-        };
+        if let Some(path) = self.s.path.clone().filter(|_| !save_as) {
+            self.save_to(path, false);
+        } else {
+            self.show_save_dialog(None);
+        }
+    }
+
+    fn save_to(&mut self, path: PathBuf, create: bool) {
         // Snapshot, then write in the background (E5.3, E6).
         let (doc, version, tx) = (self.s.doc.clone(), self.s.doc.version, self.save_tx.clone());
         std::thread::spawn(move || {
-            let r = symphony_io::save(&doc, &path).map_err(|e| e.0);
+            let r = save_project(&doc, &path, create);
             let _ = tx.send((version, path, r));
         });
         self.saving_jobs += 1;
     }
 
     /// Save synchronously. Only used right before quitting or replacing the scene.
-    fn save_now(&mut self) -> bool {
-        let Some(path) = self.s.path.clone().or_else(|| self.ask_save_path()) else {
-            return false;
-        };
-        match symphony_io::save(&self.s.doc, &path) {
+    fn save_now(&mut self, path: PathBuf, create: bool) -> bool {
+        match save_project(&self.s.doc, &path, create) {
             Ok(()) => {
                 self.s.saved_version = self.s.doc.version;
                 self.remember_project(&path);
@@ -562,7 +575,7 @@ impl SymphonyApp {
                 true
             }
             Err(e) => {
-                self.error = Some(e.0);
+                self.error = Some(e);
                 false
             }
         }
@@ -1475,12 +1488,12 @@ impl SymphonyApp {
         if let Some(p) = self.pending {
             let name = self.s.name();
             let mut choice = None;
-            egui::Modal::new(egui::Id::unique("symphony-unsaved")).show(ctx, |ui| {
+            theme::glass_modal(ctx, "symphony-unsaved").show(ctx, |ui| {
                 ui.heading(format!("Save changes to {name}?"));
                 ui.label("If you don't save, the changes since your last save are lost.");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if symphony_ui::widgets::primary_button(ui, "Save", true).clicked() {
                         choice = Some(0);
                     }
                     if ui.button("Don't save").clicked() {
@@ -1494,8 +1507,12 @@ impl SymphonyApp {
             match choice {
                 Some(0) => {
                     self.pending = None;
-                    if self.save_now() {
-                        self.proceed(ctx, p);
+                    if let Some(path) = self.s.path.clone() {
+                        if self.save_now(path, false) {
+                            self.proceed(ctx, p);
+                        }
+                    } else {
+                        self.show_save_dialog(Some(p));
                     }
                 }
                 Some(1) => {
@@ -1511,6 +1528,25 @@ impl SymphonyApp {
                     self.proceed(ctx, p);
                 }
                 Some(_) => self.pending = None,
+                None => {}
+            }
+        }
+
+        if let Some((dialog, next)) = self.save_dialog.as_mut() {
+            let action = dialog.show(ctx, self.s.path.as_deref());
+            let next = *next;
+            match action {
+                Some(save_dialog::Action::Save { path, create }) => {
+                    self.save_dialog = None;
+                    if let Some(next) = next {
+                        if self.save_now(path, create) {
+                            self.proceed(ctx, next);
+                        }
+                    } else {
+                        self.save_to(path, create);
+                    }
+                }
+                Some(save_dialog::Action::Cancel) => self.save_dialog = None,
                 None => {}
             }
         }
@@ -1669,19 +1705,18 @@ impl eframe::App for SymphonyApp {
             return;
         }
 
-        if ctx.input(|i| i.viewport().close_requested())
-            && self
-                .welcome
-                .as_ref()
-                .is_some_and(welcome::Welcome::creating)
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        }
-
-        // Closing with unsaved work asks first.
-        if ctx.input(|i| i.viewport().close_requested()) && self.s.dirty() && !self.allow_close {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.pending = Some(Pending::Quit);
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
+            if self.save_dialog.is_some()
+                || self
+                    .welcome
+                    .as_ref()
+                    .is_some_and(welcome::Welcome::creating)
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            } else if self.s.dirty() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.pending = Some(Pending::Quit);
+            }
         }
 
         self.poll_startup();
@@ -1724,7 +1759,11 @@ impl eframe::App for SymphonyApp {
         self.expire_notice(now);
         self.autosave(now);
         self.tick_playback(&ctx);
-        if self.pending.is_none() && self.recovered.is_empty() && self.error.is_none() {
+        if self.pending.is_none()
+            && self.save_dialog.is_none()
+            && self.recovered.is_empty()
+            && self.error.is_none()
+        {
             self.shortcuts(&ctx);
         }
 

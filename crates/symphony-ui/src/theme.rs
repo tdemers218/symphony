@@ -158,6 +158,16 @@ pub fn glass_rim(painter: &egui::Painter, rect: egui::Rect) {
     }
 }
 
+/// Project dialogs use a denser glass surface over the artwork.
+pub fn glass_modal(ctx: &egui::Context, id: &'static str) -> egui::Modal {
+    let frame = egui::Frame::popup(&ctx.global_style())
+        .fill(Color32::from_rgba_premultiplied(26, 28, 31, 220))
+        .corner_radius(GLASS_RADIUS)
+        .stroke(Stroke::new(1.0, GLASS_EDGE))
+        .inner_margin(Margin::same(18));
+    egui::Modal::new(egui::Id::unique(id)).frame(frame)
+}
+
 /// Paint a keyboard focus ring inside a custom control's target.
 pub(crate) fn focus_ring(ui: &egui::Ui, response: &egui::Response) {
     if response.enabled() && response.has_focus() {
