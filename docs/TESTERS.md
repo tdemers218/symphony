@@ -72,3 +72,19 @@ node counts, and a searchable [Harmony 27 Premium node reference](https://docs.t
 The original scene XML is retained in the native save. Linked artwork,
 palettes, keyframed rigs, nested compositing, and effects still require
 conversion. The reference list describes Harmony’s catalogue.
+
+## Scene and movie timing
+
+Choose 12, 24, 30 or 48 fps in the welcome screen. Change the scene rate
+later in the Timeline or the Timing menu. The rate changes how fast scene
+frames play.
+
+**Timing → Insert in-betweens** inserts frames after the playhead at any
+scene rate. Existing drawings hold through the new frames and later
+exposures and peg keys move together. Use **Create Empty Drawing** to
+start a fresh drawing in one of those frames. Undo restores the previous
+timing.
+
+**File → Export → Movie** uses the scene rate by default. Choose an
+output rate to sample the scene at a different cadence while preserving
+its duration to the nearest output frame.

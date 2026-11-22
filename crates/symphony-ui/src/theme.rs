@@ -47,8 +47,8 @@ pub const FUNCTION_Y: Color32 = hex(0x6CCB8E);
 pub const FUNCTION_ANGLE: Color32 = hex(0x6FA8F5);
 pub const FUNCTION_SCALE_X: Color32 = hex(0xC99AF2);
 pub const FUNCTION_SCALE_Y: Color32 = hex(0x5CCFD0);
-/// Neutral shadow under the stage (D3.10) and floating windows (D6.4).
-pub const SHADOW: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 150);
+/// Restrained contact shadow under the stage (D3.10).
+pub const SHADOW: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 76);
 
 // §5.2 type scale.
 pub const SIZE_DENSE: f32 = 11.0;
@@ -97,8 +97,22 @@ pub fn numbers() -> FontId {
     FontId::monospace(SIZE_DENSE)
 }
 
+pub const WORDMARK_LICENSE: &str = include_str!("../assets/bricolage/OFL.txt");
+
+pub fn wordmark() -> FontId {
+    FontId::new(44.0, FontFamily::Name("Bricolage".into()))
+}
+
 fn fonts() -> FontDefinitions {
     let mut f = FontDefinitions::default();
+    f.font_data.insert(
+        "Bricolage".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/bricolage/BricolageGrotesque-SemiBold.ttf"
+        ))),
+    );
+    f.families
+        .insert(wordmark().family, vec!["Bricolage".into()]);
     f.font_data.insert(
         "Inter".into(),
         Arc::new(FontData::from_static(include_bytes!(

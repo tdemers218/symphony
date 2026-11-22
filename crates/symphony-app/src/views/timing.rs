@@ -89,7 +89,7 @@ pub fn header(ui: &mut egui::Ui, s: &mut Session, profile: Profile) {
                 let mut length = len;
                 let r = ui.add(
                     egui::DragValue::new(&mut length)
-                        .range(1..=10_000)
+                        .range(1..=100_000)
                         .prefix("Length "),
                 );
                 if r.changed() {
@@ -99,11 +99,9 @@ pub fn header(ui: &mut egui::Ui, s: &mut Session, profile: Profile) {
                 if r.drag_stopped() || r.lost_focus() {
                     s.end_gesture();
                 }
-                ui.add(
-                    egui::DragValue::new(&mut s.doc.settings.fps)
-                        .range(1.0..=120.0)
-                        .suffix(" fps"),
-                );
+                let mut fps = s.doc.settings.fps;
+                widgets::frame_rate(ui, "timeline-fps", &mut fps);
+                s.set_frame_rate(fps);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if icons::button(ui, Icon::Trash, false, s.layer_count() > 1, "Delete layer")

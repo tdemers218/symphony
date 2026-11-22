@@ -100,6 +100,10 @@ pub enum Edit {
         before: String,
         after: String,
     },
+    SetFrameRate {
+        before: f32,
+        after: f32,
+    },
     SetLength {
         before: u32,
         after: u32,
@@ -325,6 +329,9 @@ impl Edit {
                         n.name = format!("{name}-P");
                     }
                 }
+            }
+            Edit::SetFrameRate { before, after } => {
+                s.settings.fps = if forward { *after } else { *before };
             }
             Edit::SetLength { before, after } => {
                 s.settings.length = if forward { *after } else { *before }

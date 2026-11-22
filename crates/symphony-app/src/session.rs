@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use symphony_core::anim::Value;
 use symphony_core::doc::{Scene, Settings};
-use symphony_core::graph::PegParams;
+use symphony_core::graph::{NodeKind, PegParams};
 use symphony_core::history::{Edit, History};
 use symphony_core::id::Id;
 use symphony_core::math::Affine;
@@ -534,6 +534,7 @@ impl Session {
     }
 
     fn clamp_selection(&mut self) {
+        self.frame = self.frame.clamp(1, self.length().max(1));
         if self.doc.palette.get(self.swatch).is_none() {
             if let Some(first) = self.doc.palette.swatches.first() {
                 self.swatch = first.id;
@@ -1348,6 +1349,70 @@ impl Session {
         }
     }
 
+    pub fn set_frame_rate(&mut self, fps: f32) {
+        let before = self.doc.settings.fps;
+        if before != fps {
+            self.history.apply(
+                &mut self.doc,
+                "Change frame rate",
+                vec![Edit::SetFrameRate { before, after: fps }],
+            );
+        }
+    }
+
+    /// Make room for new poses after the playhead, holding each visible
+    /// exposure until the animator creates a new drawing in an inserted cell.
+    pub fn insert_inbetweens(&mut self, count: u32) {
+        let before = self.length();
+        if count == 0 || count > 100_000u32.saturating_sub(before) {
+            return;
+        }
+        let from = self.frame + 1;
+        let mut edits = vec![Edit::SetLength {
+            before,
+            after: before + count,
+        }];
+        for column in &self.doc.xsheet.columns {
+            let held = column.get(self.frame);
+            if held.is_some() || column.len() >= from {
+                edits.extend(Edit::splice(
+                    &self.doc,
+                    column.id,
+                    from,
+                    0,
+                    vec![held; count as usize],
+                ));
+            }
+        }
+        for (id, node) in self.doc.graph.nodes() {
+            let NodeKind::Peg(before) = &node.kind else {
+                continue;
+            };
+            let mut after = before.clone();
+            for value in [&mut after.x, &mut after.y, &mut after.rotation]
+                .into_iter()
+                .chain(after.scale_x.iter_mut())
+                .chain(after.scale_y.iter_mut())
+            {
+                if let Value::Keys(keys) = value {
+                    for key in keys.iter_mut().filter(|key| key.frame >= from) {
+                        key.frame = key.frame.saturating_add(count);
+                    }
+                }
+            }
+            if &after != before {
+                edits.push(Edit::SetPeg {
+                    node: id,
+                    before: before.clone(),
+                    after,
+                });
+            }
+        }
+        self.history
+            .apply(&mut self.doc, "Insert in-betweens", edits);
+        self.frame = from;
+    }
+
     pub fn set_length(&mut self, length: u32) {
         let before = self.doc.settings.length;
         if before != length {
@@ -1765,6 +1830,35 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inserted_inbetweens_hold_exposures_and_move_keys_at_any_rate() {
+        let mut s = Session::new_scene();
+        let first = line(&mut s, 0.0, 10.0);
+        let second = line(&mut s, 10.0, 20.0);
+        s.commit_stroke(0, 1, first);
+        s.commit_stroke(0, 2, second);
+        let a = s.doc.exposed(0, 1).unwrap();
+        let b = s.doc.exposed(0, 2).unwrap();
+        let mut peg = s.doc.peg(0).unwrap().clone();
+        peg.x.set_key(1, 0.0);
+        peg.x.set_key(2, 20.0);
+        s.set_peg(0, peg);
+        s.set_frame_rate(12.0);
+        s.insert_inbetweens(3);
+        assert_eq!(s.doc.settings.fps, 12.0);
+        assert_eq!(s.length(), 51);
+        assert_eq!(s.frame, 2);
+        assert_eq!(s.doc.exposed(0, 4), Some(a));
+        assert_eq!(s.doc.exposed(0, 5), Some(b));
+        assert_eq!(s.doc.peg(0).unwrap().x.at(3), 10.0);
+        s.undo();
+        assert_eq!(s.length(), 48);
+        assert_eq!(s.doc.exposed(0, 2), Some(b));
+        assert_eq!(s.doc.peg(0).unwrap().x.at(2), 20.0);
+        s.undo();
+        assert_eq!(s.doc.settings.fps, 24.0);
+    }
 
     fn line(s: &mut Session, x0: f32, x1: f32) -> Stroke {
         let swatch = s.swatch;

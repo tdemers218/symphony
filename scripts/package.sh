@@ -18,6 +18,9 @@ APP="$STAGE/app"
 mkdir -p "$APP"
 cp "$BIN/symphony$EXE" "$APP/"
 cp LICENSE README.md "$APP/"
+WORDMARK_LICENSE="crates/symphony-ui/assets/bricolage/OFL.txt"
+cp "$WORDMARK_LICENSE" "$APP/OFL-Bricolage-Grotesque.txt"
+cp "$WORDMARK_LICENSE" "$STAGE/OFL-Bricolage-Grotesque.txt"
 NAME="symphony-$VERSION-$TARGET"
 if [[ "$TARGET" == *windows* ]]; then
   (cd "$APP" && 7z a -tzip "$OLDPWD/dist/$NAME.zip" . > /dev/null)
@@ -30,7 +33,8 @@ fi
 L="symphony-launcher-$TARGET"
 if [[ "$TARGET" == *apple* ]]; then
   BUNDLE="$STAGE/Symphony Launcher.app"
-  mkdir -p "$BUNDLE/Contents/MacOS"
+  mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+  cp "$WORDMARK_LICENSE" "$BUNDLE/Contents/Resources/OFL-Bricolage-Grotesque.txt"
   cp "$BIN/symphony-launcher" "$BUNDLE/Contents/MacOS/"
   cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -50,11 +54,11 @@ PLIST
   ditto -c -k --norsrc --noextattr --keepParent "$BUNDLE" "dist/$L.zip"
 elif [[ "$TARGET" == *windows* ]]; then
   cp "$BIN/symphony-launcher.exe" "$STAGE/"
-  (cd "$STAGE" && 7z a -tzip "$OLDPWD/dist/$L.zip" symphony-launcher.exe > /dev/null)
+  (cd "$STAGE" && 7z a -tzip "$OLDPWD/dist/$L.zip" symphony-launcher.exe OFL-Bricolage-Grotesque.txt > /dev/null)
 else
   cp "$BIN/symphony-launcher" "$STAGE/"
   chmod +x "$STAGE/symphony-launcher"
-  tar -C "$STAGE" -czf "dist/$L.tar.gz" symphony-launcher
+  tar -C "$STAGE" -czf "dist/$L.tar.gz" symphony-launcher OFL-Bricolage-Grotesque.txt
 fi
 rm -rf "$STAGE"
 ls -l dist

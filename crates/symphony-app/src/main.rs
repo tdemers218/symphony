@@ -116,6 +116,7 @@ type RecoveredScene = (String, Option<PathBuf>, Scene);
 
 struct SymphonyApp {
     save_dialog: Option<(save_dialog::SaveDialog, Option<Pending>)>,
+    inbetween_count: u32,
     welcome: Option<welcome::Welcome>,
     recent_projects: Vec<PathBuf>,
     recovery_scan: Option<Receiver<Vec<RecoveredScene>>>,
@@ -333,6 +334,7 @@ impl SymphonyApp {
                     None,
                 )
             }),
+            inbetween_count: 1,
             welcome,
             recent_projects,
             recovery_scan,
@@ -1011,6 +1013,29 @@ impl SymphonyApp {
             });
         });
         ui.menu_button("Timing", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Scene frame rate");
+                let mut fps = self.s.doc.settings.fps;
+                symphony_ui::widgets::frame_rate(ui, "timing-menu-fps", &mut fps);
+                self.s.set_frame_rate(fps);
+            });
+            ui.menu_button("Insert in-betweens", |ui| {
+                let remaining = 100_000u32.saturating_sub(self.s.length());
+                ui.add_enabled(
+                    remaining > 0,
+                    egui::DragValue::new(&mut self.inbetween_count)
+                        .range(1..=remaining.max(1))
+                        .suffix(" frames"),
+                );
+                if symphony_ui::widgets::primary_button(ui, "Insert after playhead", remaining > 0)
+                    .clicked()
+                {
+                    self.s
+                        .insert_inbetweens(self.inbetween_count.min(remaining));
+                    ui.close();
+                }
+            });
+            ui.separator();
             self.menu_action(ui, Action::IncreaseExposure);
             self.menu_action(ui, Action::DecreaseExposure);
             ui.separator();
@@ -1933,6 +1958,9 @@ impl eframe::App for SymphonyApp {
                 ui.label(codec::NOTICE);
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                     ui.label(egui::RichText::new(codec::LICENSE).font(theme::dense()));
+                    ui.separator();
+                    ui.heading("Bricolage Grotesque");
+                    ui.label(egui::RichText::new(theme::WORDMARK_LICENSE).font(theme::dense()));
                 });
             });
         self.show_licences = open;

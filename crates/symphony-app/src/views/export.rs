@@ -33,6 +33,7 @@ pub struct ExportDialog {
     first: u32,
     last: u32,
     scale: f32,
+    movie_fps: Option<f32>,
     running: Option<Running>,
     result: Option<Result<PathBuf, String>>,
 }
@@ -46,6 +47,7 @@ impl Default for ExportDialog {
             first: 1,
             last: 1,
             scale: 1.0,
+            movie_fps: None,
             running: None,
             result: None,
         }
@@ -73,6 +75,7 @@ impl ExportDialog {
             return;
         }
         self.format = Some(format);
+        self.movie_fps = None;
         self.last = s.length();
         self.first = self.first.clamp(1, self.last);
         self.result = None;
@@ -124,6 +127,7 @@ impl ExportDialog {
             last,
             scale: self.scale,
             codec,
+            movie_fps: self.movie_fps,
         };
         let scene = s.doc.clone();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -142,7 +146,15 @@ impl ExportDialog {
             cancel,
             rx,
             done: 0,
-            total: last - first + 1,
+            total: if format == Format::Mp4Movie {
+                symphony_render::movie::output_frame_count(
+                    last - first + 1,
+                    s.doc.settings.fps,
+                    self.movie_fps.unwrap_or(s.doc.settings.fps),
+                )
+            } else {
+                last - first + 1
+            },
         });
         self.result = None;
     }
@@ -221,6 +233,20 @@ impl ExportDialog {
                         ui.add(egui::DragValue::new(&mut self.last).range(1..=len));
                     });
                     ui.add_space(6.0);
+                    if format == Format::Mp4Movie {
+                        ui.horizontal(|ui| {
+                            ui.label("Movie frame rate");
+                            egui::ComboBox::from_id_salt("movie-rate").selected_text(
+                                self.movie_fps.map_or_else(|| format!("Scene rate ({} fps)", s.doc.settings.fps),
+                                    |rate| format!("{rate} fps"))
+                            ).show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.movie_fps, None, "Scene rate");
+                                for rate in widgets::FRAME_RATES {
+                                    ui.selectable_value(&mut self.movie_fps, Some(rate), format!("{rate:.0} fps"));
+                                }
+                            });
+                        });
+                    }
                     ui.label("Resolution");
                     let (w, h) = (s.doc.settings.width, s.doc.settings.height);
                     egui::ComboBox::from_id_salt("export-scale")

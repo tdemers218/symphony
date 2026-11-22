@@ -179,6 +179,8 @@ pub struct ExportJob {
     pub scale: f32,
     /// Path to Cisco's OpenH264 binary, for movies.
     pub codec: Option<PathBuf>,
+    /// MP4 rate override. Resamples the scene in time when set.
+    pub movie_fps: Option<f32>,
 }
 
 /// Run an export. `progress` gets (done, total). Stops early, cleanly, when
@@ -213,7 +215,18 @@ pub fn export(
             let codec = job.codec.as_deref().ok_or(
                 "Movie export needs the OpenH264 codec. Download it in Preferences > Video.",
             )?;
-            movie::export_mp4(scene, codec, &job.path, first, last, w, h, cancel, progress)
+            movie::export_mp4(
+                scene,
+                codec,
+                &job.path,
+                first,
+                last,
+                w,
+                h,
+                job.movie_fps,
+                cancel,
+                progress,
+            )
         }
         Format::AnimatedGif => {
             let file = std::fs::File::create(&job.path)
@@ -372,6 +385,7 @@ mod tests {
             last: 3,
             scale: 0.5,
             codec: None,
+            movie_fps: None,
         };
         export(&s, &gif, &cancel, &|_, _| {}).unwrap();
         assert!(std::fs::metadata(dir.join("a.gif")).unwrap().len() > 0);
@@ -382,6 +396,7 @@ mod tests {
             last: 3,
             scale: 1.0,
             codec: None,
+            movie_fps: None,
         };
         export(&s, &png, &cancel, &|_, _| {}).unwrap();
         assert!(dir.join("shot_0002.png").is_file() && dir.join("shot_0003.png").is_file());
@@ -395,10 +410,17 @@ mod tests {
                 last: 3,
                 scale: 1.0,
                 codec: Some(codec.into()),
+                movie_fps: Some(48.0),
             };
             export(&s, &mp4, &cancel, &|_, _| {}).unwrap();
             let bytes = std::fs::read(dir.join("m.mp4")).unwrap();
             assert_eq!(&bytes[4..8], b"ftyp", "an MP4 file starts with ftyp");
+            let file = std::io::Cursor::new(&bytes);
+            let reader = mp4::Mp4Reader::read_header(file, bytes.len() as u64).unwrap();
+            let track = &reader.tracks()[&1];
+            assert_eq!(track.sample_count(), 12);
+            assert_eq!(track.frame_rate(), 48.0);
+            assert_eq!(track.duration(), std::time::Duration::from_millis(250));
             if let Some(keep) = std::env::var_os("SYMPHONY_TEST_MP4_OUT") {
                 std::fs::write(keep, &bytes).unwrap();
             }

@@ -52,6 +52,12 @@ pub fn split_annex_b(stream: &[u8]) -> Vec<&[u8]> {
     units
 }
 
+pub fn output_frame_count(source_frames: u32, source_fps: f32, output_fps: f32) -> u32 {
+    (f64::from(source_frames) * f64::from(output_fps) / f64::from(source_fps.max(1.0)))
+        .round()
+        .max(1.0) as u32
+}
+
 /// Encode frames `first..=last` of `scene` at `w` x `h` into an MP4 at `out`.
 #[allow(clippy::too_many_arguments)]
 pub fn export_mp4(
@@ -62,12 +68,17 @@ pub fn export_mp4(
     last: u32,
     w: u32,
     h: u32,
+    movie_fps: Option<f32>,
     cancel: &AtomicBool,
     progress: &dyn Fn(u32, u32),
 ) -> Result<(), String> {
     // 4:2:0 video needs even sizes.
     let (w, h) = ((w & !1).max(2), (h & !1).max(2));
-    let fps = scene.settings.fps.max(1.0);
+    let source_fps = scene.settings.fps.max(1.0);
+    let fps = movie_fps.unwrap_or(source_fps);
+    if !source_fps.is_finite() || !fps.is_finite() || !(1.0..=120.0).contains(&fps) {
+        return Err("Choose a valid movie frame rate.".into());
+    }
     let api = OpenH264API::from_blob_path(codec).map_err(|e| {
         format!("Couldn't load the OpenH264 codec ({e}). Download it again in Preferences > Video.")
     })?;
@@ -94,9 +105,11 @@ pub fn export_mp4(
     // Timescale ticks per frame, so fractional rates (23.976) stay close.
     let per_frame = 100u32;
     let timescale = (fps * per_frame as f32).round() as u32;
-    let total = last - first + 1;
+    let total = output_frame_count(last - first + 1, source_fps, fps);
 
-    for (i, f) in (first..=last).enumerate() {
+    for i in 0..total {
+        let offset = (f64::from(i) * f64::from(source_fps) / f64::from(fps)).floor() as u32;
+        let f = first.saturating_add(offset).min(last);
         if cancel.load(Ordering::SeqCst) {
             return Err("Export cancelled.".into());
         }
@@ -162,7 +175,7 @@ pub fn export_mp4(
                     .map_err(|e| format!("Couldn't write frame {f} ({e})."))?;
             }
         }
-        progress(i as u32 + 1, total);
+        progress(i + 1, total);
     }
     if let Some(mut wr) = writer {
         wr.write_end()
