@@ -38,7 +38,7 @@ When two rules conflict, the higher principle wins.
   quiet and readable for hours. Colour and motion only appear when they
   mean something.
 - **P6. Symphony looks like Symphony.** Harmony's structure, our own
-  identity: our own icons, colours and type. We never copy Toon Boom
+  identity: our icon family, colours and type. We never copy Toon Boom
   artwork (see [CLEAN-ROOM.md](CLEAN-ROOM.md)).
 
 - **P7. The art is the artist's.** This one is absolute: it never trades off
@@ -249,16 +249,12 @@ and animation state.
 
 ## 7. Icons
 
-- **D7.1 Our own icon set**, drawn in code
-  (`crates/symphony-ui/src/icons.rs`) so it stays sharp at any scale.
-  **No emoji, and no Unicode symbols used as icons.** No third-party
-  icon fonts mixed in.
-- **D7.2 Drawing grid.**
-  - 16×16 units, with 2 units of padding.
-  - Strokes are 1.5 units with round caps and joins. Check the 16 px toolbar glyph beside its 20 px tool-strip version. Keep enclosed spaces open at the smaller size.
-  - Compare related actions side by side. Directional pairs share geometry, and each drawing tool has a recognizable working tip.
-  - Outline style. Solid fill only where it *means* something: play,
-    record, a set keyframe, an active state.
+- **D7.1 Icon family.** Use Phosphor Regular for standard controls.
+  Bundle its MIT notice with releases. Keep custom artwork for commands
+  that require a distinct animation symbol, such as Close Gap.
+- **D7.2 Drawing grid.** Review both the 16 px toolbar glyph and its
+  20 px tool-strip version. Use consistent stroke weight and open interior
+  spaces. Match directional pairs and keep each tool's working tip legible.
 - **D7.3 Colour.**
   - At rest: `text.primary`.
   - Active or toggled on: white on `accent.select.fill`.
@@ -383,7 +379,7 @@ and animation state.
 ## 12. One look on every OS
 
 - **D12.1 Same pixels everywhere.** Symphony draws its whole UI itself
-  with bundled fonts and its own icons. It never uses OS widgets, OS
+  with bundled fonts and its icon family. It never uses OS widgets, OS
   fonts or OS themes inside the window, so macOS, Windows and Linux look
   identical.
 - **D12.2 Differences are deliberate and listed here:**

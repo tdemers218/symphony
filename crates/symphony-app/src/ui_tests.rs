@@ -27,6 +27,7 @@ pub fn rig() -> Harness<'static, Rig> {
         samples: Vec::new(),
     };
     let mut h = Harness::builder()
+        .with_context_setup(symphony_ui::theme::apply)
         .with_size(Vec2::new(1000.0, 700.0))
         .build_ui_state(
             |ui, r: &mut Rig| {

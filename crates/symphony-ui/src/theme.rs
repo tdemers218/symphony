@@ -88,8 +88,20 @@ pub fn numbers() -> FontId {
     FontId::monospace(SIZE_DENSE)
 }
 
+pub(crate) fn phosphor_family() -> FontFamily {
+    FontFamily::Name("Phosphor".into())
+}
+
 fn fonts() -> FontDefinitions {
     let mut f = FontDefinitions::default();
+    f.font_data.insert(
+        "Phosphor".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/phosphor/Phosphor-Regular.ttf"
+        ))),
+    );
+    f.families
+        .insert(phosphor_family(), vec!["Phosphor".into()]);
     f.font_data.insert(
         "Inter".into(),
         Arc::new(FontData::from_static(include_bytes!(

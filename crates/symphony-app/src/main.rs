@@ -1744,6 +1744,9 @@ impl eframe::App for SymphonyApp {
                 ui.label(codec::NOTICE);
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                     ui.label(egui::RichText::new(codec::LICENSE).font(theme::dense()));
+                    ui.separator();
+                    ui.heading("Phosphor Icons");
+                    ui.label(egui::RichText::new(icons::PHOSPHOR_LICENSE).font(theme::dense()));
                 });
             });
         self.show_licences = open;
