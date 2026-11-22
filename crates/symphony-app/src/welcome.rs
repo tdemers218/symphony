@@ -98,68 +98,70 @@ impl Welcome {
                             .corner_radius(theme::GLASS_RADIUS)
                             .inner_margin(Margin::same(18))
                             .show(ui, |ui| {
-                                ui.set_width((form_width - 36.0).max(0.0));
-                                ui.heading("New scene");
-                                ui.add_space(8.0);
-                                ui.add_enabled_ui(!opening && self.pending.is_none(), |ui| {
-                                    self.form(ui);
-                                });
-                                ui.add_space(10.0);
-                                if let Some(error) = &self.error {
-                                    ui.label(error);
-                                }
-                                ui.horizontal_wrapped(|ui| {
-                                    if widgets::primary_button(
-                                        ui,
-                                        "Create scene",
-                                        !busy && self.folder.is_some(),
-                                    )
-                                    .clicked()
-                                    {
-                                        self.create(ui.ctx());
+                                ui.vertical(|ui| {
+                                    ui.set_width((form_width - 36.0).max(0.0));
+                                    ui.heading("New scene");
+                                    ui.add_space(8.0);
+                                    ui.add_enabled_ui(!opening && self.pending.is_none(), |ui| {
+                                        self.form(ui);
+                                    });
+                                    ui.add_space(10.0);
+                                    if let Some(error) = &self.error {
+                                        ui.label(error);
                                     }
-                                    if ui
-                                        .add_enabled(!busy, egui::Button::new("Open project…"))
+                                    ui.horizontal_wrapped(|ui| {
+                                        if widgets::primary_button(
+                                            ui,
+                                            "Create scene",
+                                            !busy && self.folder.is_some(),
+                                        )
                                         .clicked()
-                                    {
-                                        action = Some(Action::Open);
-                                    }
-                                    if self.can_cancel
-                                        && ui
-                                            .add_enabled(!busy, egui::Button::new("Cancel"))
+                                        {
+                                            self.create(ui.ctx());
+                                        }
+                                        if ui
+                                            .add_enabled(!busy, egui::Button::new("Open project…"))
                                             .clicked()
-                                    {
-                                        action = Some(Action::Cancel);
-                                    }
-                                    if busy {
-                                        feedback::spinner(ui, 14.0);
-                                        ui.label(if opening {
-                                            "Opening project"
-                                        } else if preparing {
-                                            "Checking for recovered scenes"
-                                        } else {
-                                            "Creating scene"
+                                        {
+                                            action = Some(Action::Open);
+                                        }
+                                        if self.can_cancel
+                                            && ui
+                                                .add_enabled(!busy, egui::Button::new("Cancel"))
+                                                .clicked()
+                                        {
+                                            action = Some(Action::Cancel);
+                                        }
+                                        if busy {
+                                            feedback::spinner(ui, 14.0);
+                                            ui.label(if opening {
+                                                "Opening project"
+                                            } else if preparing {
+                                                "Checking for recovered scenes"
+                                            } else {
+                                                "Creating scene"
+                                            });
+                                        }
+                                    });
+                                    if !recent.is_empty() {
+                                        ui.add_space(8.0);
+                                        ui.label(
+                                            egui::RichText::new("Recent projects")
+                                                .color(theme::TEXT_SECONDARY),
+                                        );
+                                        ui.add_enabled_ui(!busy, |ui| {
+                                            for path in recent {
+                                                if ui
+                                                    .button(symphony_io::project_name(path))
+                                                    .on_hover_text(path.display().to_string())
+                                                    .clicked()
+                                                {
+                                                    action = Some(Action::Recent(path.clone()));
+                                                }
+                                            }
                                         });
                                     }
                                 });
-                                if !recent.is_empty() {
-                                    ui.add_space(8.0);
-                                    ui.label(
-                                        egui::RichText::new("Recent projects")
-                                            .color(theme::TEXT_SECONDARY),
-                                    );
-                                    ui.add_enabled_ui(!busy, |ui| {
-                                        for path in recent {
-                                            if ui
-                                                .button(symphony_io::project_name(path))
-                                                .on_hover_text(path.display().to_string())
-                                                .clicked()
-                                            {
-                                                action = Some(Action::Recent(path.clone()));
-                                            }
-                                        }
-                                    });
-                                }
                             });
                         theme::glass_rim(ui.painter(), card.response.rect);
                         let banner_width =
