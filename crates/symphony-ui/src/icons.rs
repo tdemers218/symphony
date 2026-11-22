@@ -487,7 +487,23 @@ fn sized_button(
     let bg = egui::Color32::TRANSPARENT
         .lerp_to_gamma(theme::BG_HOVER, hover)
         .lerp_to_gamma(theme::ACCENT_SELECT_FILL, selected);
-    painter.rect_filled(rect, theme::RADIUS_CONTROL as f32, bg);
+    let radius = if size == theme::TOOL_BUTTON {
+        if selected > 0.0 {
+            painter.add(
+                egui::epaint::Shadow {
+                    offset: [0, 0],
+                    blur: 8,
+                    spread: 0,
+                    color: theme::ACCENT_SELECT.gamma_multiply(0.22 * selected),
+                }
+                .as_shape(rect, theme::GLASS_CONTROL_RADIUS),
+            );
+        }
+        theme::GLASS_CONTROL_RADIUS
+    } else {
+        theme::RADIUS_CONTROL
+    };
+    painter.rect_filled(rect, radius, bg);
     let fg = if enabled {
         theme::TEXT_PRIMARY.lerp_to_gamma(theme::ON_ACCENT, selected)
     } else {

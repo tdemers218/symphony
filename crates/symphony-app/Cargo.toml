@@ -15,7 +15,7 @@ dirs = "7"
 symphony-brushes = { path = "../symphony-brushes" }
 eframe = { version = "0.37", features = ["persistence"] }
 egui_dock = { version = "0.22", features = ["serde"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 openh264 = { version = "0.9", default-features = false, features = ["libloading"] }
 rfd = "0.18"
 serde = { version = "1", features = ["derive"] }

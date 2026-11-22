@@ -70,6 +70,13 @@ pub const FRAME_CELL: f32 = 16.0;
 pub const CARD_PAD: i8 = 12;
 pub const GUTTER: f32 = 6.0;
 
+// Workspace glass surfaces composite over the cached wallpaper.
+pub const GLASS_PANEL: Color32 = Color32::from_rgba_premultiplied(21, 22, 25, 179);
+pub const GLASS_CHROME: Color32 = Color32::from_rgba_premultiplied(14, 15, 17, 158);
+pub const GLASS_EDGE: Color32 = Color32::from_rgba_premultiplied(23, 23, 23, 23);
+pub const GLASS_RADIUS: u8 = 12;
+pub const GLASS_CONTROL_RADIUS: u8 = 7;
+
 // §6.3 radii.
 pub const RADIUS_CONTROL: u8 = 4;
 pub const RADIUS_CARD: u8 = 8;
@@ -208,16 +215,16 @@ pub fn apply(ctx: &egui::Context) {
 pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     use egui_dock::TabInteractionStyle;
     let top = CornerRadius {
-        nw: RADIUS_CARD,
-        ne: RADIUS_CARD,
+        nw: GLASS_RADIUS,
+        ne: GLASS_RADIUS,
         sw: 0,
         se: 0,
     };
     let bottom = CornerRadius {
         nw: 0,
         ne: 0,
-        sw: RADIUS_CARD,
-        se: RADIUS_CARD,
+        sw: GLASS_RADIUS,
+        se: GLASS_RADIUS,
     };
     let tab_radius = CornerRadius::same(RADIUS_CONTROL);
     let tab = |bg: Color32, text: Color32, outline: Color32| TabInteractionStyle {
@@ -233,10 +240,10 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     d.main_surface_border_rounding = CornerRadius::ZERO;
     d.separator.width = GUTTER;
     d.separator.extra = 0.0;
-    d.separator.color_idle = BG_BASE;
+    d.separator.color_idle = Color32::TRANSPARENT;
     d.separator.color_hovered = LINE_STRONG;
     d.separator.color_dragged = ACCENT_SELECT;
-    d.tab_bar.bg_fill = BG_PANEL;
+    d.tab_bar.bg_fill = GLASS_PANEL;
     d.tab_bar.height = TAB_ROW;
     d.tab_bar.corner_radius = top;
     d.tab_bar.hline_color = Color32::TRANSPARENT;
@@ -248,15 +255,15 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
         bottom: 4,
     };
     d.tab.active = tab(BG_RAISED, TEXT_PRIMARY, Color32::TRANSPARENT);
-    d.tab.inactive = tab(BG_PANEL, TEXT_SECONDARY, Color32::TRANSPARENT);
+    d.tab.inactive = tab(Color32::TRANSPARENT, TEXT_SECONDARY, Color32::TRANSPARENT);
     d.tab.hovered = tab(BG_HOVER, TEXT_PRIMARY, Color32::TRANSPARENT);
     d.tab.focused = tab(BG_RAISED, TEXT_PRIMARY, ACCENT_SELECT);
     d.tab.active_with_kb_focus = tab(BG_RAISED, TEXT_PRIMARY, ACCENT_SELECT);
-    d.tab.inactive_with_kb_focus = tab(BG_PANEL, TEXT_PRIMARY, ACCENT_SELECT);
+    d.tab.inactive_with_kb_focus = tab(Color32::TRANSPARENT, TEXT_PRIMARY, ACCENT_SELECT);
     d.tab.focused_with_kb_focus = tab(BG_RAISED, TEXT_PRIMARY, ACCENT_SELECT);
     d.tab.hline_below_active_tab_name = false;
-    d.tab.tab_body.bg_fill = BG_PANEL;
-    d.tab.tab_body.stroke = Stroke::NONE;
+    d.tab.tab_body.bg_fill = GLASS_PANEL;
+    d.tab.tab_body.stroke = Stroke::new(1.0, GLASS_EDGE);
     d.tab.tab_body.corner_radius = bottom;
     d.tab.tab_body.inner_margin = Margin::same(0);
     d.overlay.selection_color = ACCENT_SELECT.gamma_multiply(0.25);

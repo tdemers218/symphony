@@ -13,6 +13,7 @@ mod shot;
 mod ui_tests;
 mod update;
 mod views;
+mod wallpaper;
 mod workspace;
 
 use std::path::PathBuf;
@@ -40,6 +41,8 @@ const AUTOSAVE_EVERY: f64 = 120.0;
 
 #[derive(Serialize, Deserialize)]
 struct Saved {
+    #[serde(default)]
+    wallpaper: wallpaper::Choice,
     #[serde(default = "yes")]
     interface_animations: bool,
     workspace: Workspace,
@@ -106,6 +109,7 @@ const NOTICE_SECONDS: f64 = 4.0;
 type SaveResult = (u64, PathBuf, Result<(), String>);
 
 struct SymphonyApp {
+    wallpaper: wallpaper::Wallpaper,
     interface_animations: bool,
     s: Session,
     /// Brush and Pencil presets, kept in preferences like Harmony's.
@@ -198,6 +202,22 @@ impl SymphonyApp {
         let saved: Option<Saved> = cc
             .storage
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY));
+        let mut wallpaper_choice = saved
+            .as_ref()
+            .map(|s| s.wallpaper.clone())
+            .unwrap_or_default();
+        if std::env::var_os("SYMPHONY_SCREENSHOT").is_some() {
+            wallpaper_choice = match std::env::var("SYMPHONY_SHOT_WALLPAPER").as_deref() {
+                Ok("Plain") => wallpaper::Choice::Plain,
+                Ok("Studio") => wallpaper::Choice::Studio,
+                Ok("Dusk") => wallpaper::Choice::Dusk,
+                Ok("Custom") => std::env::var_os("SYMPHONY_SHOT_WALLPAPER_FILE")
+                    .map_or(wallpaper::Choice::Plain, |path| {
+                        wallpaper::Choice::Custom(path.into())
+                    }),
+                _ => wallpaper::Choice::Black,
+            };
+        }
         let interface_animations = saved.as_ref().is_none_or(|s| s.interface_animations);
         theme::set_motion(&cc.egui_ctx, interface_animations);
         let brush_size_cursor = saved.as_ref().is_some_and(|s| s.brush_size_cursor);
@@ -278,6 +298,7 @@ impl SymphonyApp {
         let (save_tx, save_rx) = channel();
         let version = s.doc.version;
         SymphonyApp {
+            wallpaper: wallpaper::Wallpaper::new(&cc.egui_ctx, wallpaper_choice),
             interface_animations,
             s,
             workspace,
@@ -1065,8 +1086,9 @@ impl SymphonyApp {
             &[Tool::Hand, Tool::Zoom],
         ];
         egui::Frame::new()
-            .fill(theme::BG_PANEL)
-            .corner_radius(theme::RADIUS_CARD)
+            .fill(theme::GLASS_PANEL)
+            .stroke(egui::Stroke::new(1.0, theme::GLASS_EDGE))
+            .corner_radius(theme::GLASS_RADIUS)
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
                 ui.set_min_height(ui.available_height());
@@ -1501,7 +1523,7 @@ impl Viewer<'_> {
     fn view(&mut self, ui: &mut egui::Ui, v: View) {
         // Fade the incoming content in place. Pen coordinates and hit targets stay fixed.
         let duration = ui.style().animation_time as f64;
-        if duration > 0.0 {
+        if duration > 0.0 && !matches!(v, View::Camera | View::Drawing) {
             let key = egui::Id::unique(("view-appearance", self.workspace, v));
             let frame = ui.ctx().cumulative_frame_nr();
             let now = ui.input(|i| i.time);
@@ -1620,7 +1642,8 @@ impl eframe::App for SymphonyApp {
             self.title = title;
         }
 
-        let base = egui::Frame::new().fill(theme::BG_BASE);
+        self.wallpaper.paint(ui);
+        let base = egui::Frame::new().fill(theme::GLASS_CHROME);
         egui::Panel::top("top-bar")
             .show_separator_line(false)
             .frame(base.inner_margin(egui::Margin::symmetric(10, 0)))
@@ -1634,7 +1657,7 @@ impl eframe::App for SymphonyApp {
         let g = theme::GUTTER as i8;
         egui::Panel::left("tools")
             .show_separator_line(false)
-            .frame(base.inner_margin(egui::Margin {
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
                 left: g,
                 right: 0,
                 top: g,
@@ -1655,6 +1678,7 @@ impl eframe::App for SymphonyApp {
                     .max_height(560.0)
                     .show(ui, |ui| {
                         ui.heading("Interface");
+                        self.wallpaper.preferences(ui);
                         if symphony_ui::widgets::checkbox(
                             ui,
                             &mut self.interface_animations,
@@ -1706,7 +1730,7 @@ impl eframe::App for SymphonyApp {
             profile: self.profile,
             presets: &mut self.presets,
         };
-        let central = egui::Frame::new().fill(theme::BG_BASE);
+        let central = egui::Frame::new();
         egui::CentralPanel::default()
             .frame(central)
             .show(ui, |ui| match maximised {
@@ -1768,6 +1792,7 @@ impl eframe::App for SymphonyApp {
             return;
         }
         let saved = Saved {
+            wallpaper: self.wallpaper.choice.clone(),
             interface_animations: self.interface_animations,
             workspace: self.workspace,
             layouts: self.layouts.clone(),
