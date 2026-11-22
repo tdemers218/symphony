@@ -1730,7 +1730,8 @@ impl eframe::App for SymphonyApp {
             return;
         }
 
-        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
+        if self.shot.is_none() && ctx.input(|i| i.viewport().close_requested()) && !self.allow_close
+        {
             if self.save_dialog.is_some()
                 || self
                     .welcome
