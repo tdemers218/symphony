@@ -156,7 +156,10 @@ Tokens live in `crates/symphony-ui/src/theme.rs`.
 
 The wallpaper sits behind the editor chrome. Black is the default, with
 Plain, Studio, Dusk and a custom PNG or JPEG available under Preferences → Interface.
-Docked panels use a 70% graphite tint with a fine edge. The menu and status
+Each docked panel and the tool strip have one 12 px outer contour, one
+graphite fill and a 1 px inner rim. The top highlight follows that rim.
+Inset corners use the outer radius minus the inset, so nested contours
+share a centre. Rectangular view content sits inside the outside corners. The menu and status
 bars use a slightly more transparent tint. The Camera and Drawing surfaces,
 including the stage, stay opaque so the wallpaper cannot tint artwork.
 
@@ -239,9 +242,9 @@ and animation state.
   - Minimum pen target: 24 px.
   - Card inner padding: 12 px. Gutter between cards: 6 px.
 - **D6.3 Corner radius.**
-  - Controls, rows and exposure blocks: 4 px. Tool-strip buttons: 7 px.
+  - Controls, rows and exposure blocks: 4 px. Tool-strip buttons: 6 px.
   - Docked glass panels and the Tools toolbar: 12 px.
-  - Popups, menus and floating windows: 8 px.
+  - Popups and menus: 8 px. Floating windows: 12 px.
   - The stage: 0, because paper has square corners.
 - **D6.4 Shadows** only on things that float above the dock (menus,
   popups, floating windows), and on the stage (D3.10). Cards are flat:

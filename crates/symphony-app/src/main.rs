@@ -1085,11 +1085,10 @@ impl SymphonyApp {
             &[Tool::Paint, Tool::CloseGap, Tool::Dropper],
             &[Tool::Hand, Tool::Zoom],
         ];
-        egui::Frame::new()
+        let frame = egui::Frame::new()
             .fill(theme::GLASS_PANEL)
-            .stroke(egui::Stroke::new(1.0, theme::GLASS_EDGE))
             .corner_radius(theme::GLASS_RADIUS)
-            .inner_margin(egui::Margin::same(6))
+            .inner_margin(egui::Margin::same(theme::GLASS_TOOL_INSET))
             .show(ui, |ui| {
                 ui.set_min_height(ui.available_height());
                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -1111,6 +1110,7 @@ impl SymphonyApp {
                     }
                 }
             });
+        theme::glass_rim(ui.painter(), frame.response.rect);
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui, device: Option<&DeviceInfo>) {
@@ -1734,8 +1734,21 @@ impl eframe::App for SymphonyApp {
         egui::CentralPanel::default()
             .frame(central)
             .show(ui, |ui| match maximised {
-                Some(v) => viewer.view(ui, v),
+                Some(v) => {
+                    let card = egui::Frame::new()
+                        .fill(theme::GLASS_PANEL)
+                        .corner_radius(theme::GLASS_RADIUS)
+                        .outer_margin(egui::Margin::same(theme::GUTTER as i8))
+                        .inner_margin(egui::Margin::same(4))
+                        .show(ui, |ui| viewer.view(ui, v));
+                    theme::glass_rim(ui.painter(), card.response.rect.shrink(theme::GUTTER));
+                }
+
                 None => {
+                    // Reserve the fill below the dock's widgets. Leaf bounds are
+                    // final only after the splitters have processed this frame.
+                    let painter = ui.painter().clone();
+                    let background = painter.add(egui::Shape::Noop);
                     DockArea::new(layout)
                         .style(theme::dock_style(ui.style()))
                         .show_add_buttons(false)
@@ -1743,6 +1756,23 @@ impl eframe::App for SymphonyApp {
                         .show_leaf_close_all_buttons(false)
                         .show_leaf_collapse_buttons(false)
                         .show_inside(ui, &mut viewer);
+                    let mut fills = Vec::new();
+                    for leaf in layout
+                        .main_surface()
+                        .iter()
+                        .filter_map(|node| node.get_leaf())
+                    {
+                        let rect = leaf.rect();
+                        if rect.is_positive() && !leaf.tabs.is_empty() {
+                            fills.push(egui::Shape::rect_filled(
+                                rect,
+                                theme::GLASS_RADIUS,
+                                theme::GLASS_PANEL,
+                            ));
+                            theme::glass_rim(&painter, rect);
+                        }
+                    }
+                    painter.set(background, egui::Shape::Vec(fills));
                 }
             });
 

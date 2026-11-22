@@ -75,7 +75,9 @@ pub const GLASS_PANEL: Color32 = Color32::from_rgba_premultiplied(21, 22, 25, 17
 pub const GLASS_CHROME: Color32 = Color32::from_rgba_premultiplied(14, 15, 17, 158);
 pub const GLASS_EDGE: Color32 = Color32::from_rgba_premultiplied(23, 23, 23, 23);
 pub const GLASS_RADIUS: u8 = 12;
-pub const GLASS_CONTROL_RADIUS: u8 = 7;
+pub const GLASS_TOOL_INSET: i8 = 6;
+pub const GLASS_CONTROL_RADIUS: u8 = GLASS_RADIUS - GLASS_TOOL_INSET as u8;
+const GLASS_TAB_INSET: i8 = 5;
 
 // §6.3 radii.
 pub const RADIUS_CONTROL: u8 = 4;
@@ -137,6 +139,25 @@ pub fn set_motion(ctx: &egui::Context, enabled: bool) {
     ctx.all_styles_mut(|style| style.animation_time = if enabled { 0.12 } else { 0.0 });
 }
 
+/// One inner rim on the same rounded rectangle as the glass fill.
+pub fn glass_rim(painter: &egui::Painter, rect: egui::Rect) {
+    painter.rect_stroke(
+        rect,
+        GLASS_RADIUS,
+        Stroke::new(1.0, GLASS_EDGE),
+        egui::StrokeKind::Inside,
+    );
+    let inset = f32::from(GLASS_RADIUS);
+    if rect.width() > inset * 2.0 {
+        let y = rect.top() + 0.5;
+        painter.hline(
+            rect.left() + inset..=rect.right() - inset,
+            y,
+            Stroke::new(1.0, Color32::from_white_alpha(15)),
+        );
+    }
+}
+
 /// Paint a keyboard focus ring inside a custom control's target.
 pub(crate) fn focus_ring(ui: &egui::Ui, response: &egui::Response) {
     if response.enabled() && response.has_focus() {
@@ -185,8 +206,8 @@ pub fn apply(ctx: &egui::Context) {
             spread: 0,
             color: hex(0).gamma_multiply(0.32),
         };
-        v.window_stroke = Stroke::new(1.0, LINE_STRONG);
-        v.window_corner_radius = CornerRadius::same(RADIUS_FLOATING);
+        v.window_stroke = Stroke::new(1.0, GLASS_EDGE);
+        v.window_corner_radius = CornerRadius::same(GLASS_RADIUS);
         v.menu_corner_radius = CornerRadius::same(RADIUS_FLOATING);
         v.extreme_bg_color = BG_INPUT;
         v.faint_bg_color = BG_RAISED;
@@ -214,19 +235,7 @@ pub fn apply(ctx: &egui::Context) {
 /// buttons (D3.4).
 pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     use egui_dock::TabInteractionStyle;
-    let top = CornerRadius {
-        nw: GLASS_RADIUS,
-        ne: GLASS_RADIUS,
-        sw: 0,
-        se: 0,
-    };
-    let bottom = CornerRadius {
-        nw: 0,
-        ne: 0,
-        sw: GLASS_RADIUS,
-        se: GLASS_RADIUS,
-    };
-    let tab_radius = CornerRadius::same(RADIUS_CONTROL);
+    let tab_radius = CornerRadius::same(GLASS_RADIUS - GLASS_TAB_INSET as u8);
     let tab = |bg: Color32, text: Color32, outline: Color32| TabInteractionStyle {
         outline_color: outline,
         corner_radius: tab_radius,
@@ -243,17 +252,12 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     d.separator.color_idle = Color32::TRANSPARENT;
     d.separator.color_hovered = LINE_STRONG;
     d.separator.color_dragged = ACCENT_SELECT;
-    d.tab_bar.bg_fill = GLASS_PANEL;
+    d.tab_bar.bg_fill = Color32::TRANSPARENT;
     d.tab_bar.height = TAB_ROW;
-    d.tab_bar.corner_radius = top;
+    d.tab_bar.corner_radius = CornerRadius::ZERO;
     d.tab_bar.hline_color = Color32::TRANSPARENT;
     d.tab_bar.show_scroll_bar_on_overflow = false;
-    d.tab_bar.inner_margin = Margin {
-        left: 6,
-        right: 6,
-        top: 4,
-        bottom: 4,
-    };
+    d.tab_bar.inner_margin = Margin::same(GLASS_TAB_INSET);
     d.tab.active = tab(BG_RAISED, TEXT_PRIMARY, Color32::TRANSPARENT);
     d.tab.inactive = tab(Color32::TRANSPARENT, TEXT_SECONDARY, Color32::TRANSPARENT);
     d.tab.hovered = tab(BG_HOVER, TEXT_PRIMARY, Color32::TRANSPARENT);
@@ -262,10 +266,16 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     d.tab.inactive_with_kb_focus = tab(Color32::TRANSPARENT, TEXT_PRIMARY, ACCENT_SELECT);
     d.tab.focused_with_kb_focus = tab(BG_RAISED, TEXT_PRIMARY, ACCENT_SELECT);
     d.tab.hline_below_active_tab_name = false;
-    d.tab.tab_body.bg_fill = GLASS_PANEL;
-    d.tab.tab_body.stroke = Stroke::new(1.0, GLASS_EDGE);
-    d.tab.tab_body.corner_radius = bottom;
-    d.tab.tab_body.inner_margin = Margin::same(0);
+    d.tab.tab_body.bg_fill = Color32::TRANSPARENT;
+    d.tab.tab_body.stroke = Stroke::NONE;
+    d.tab.tab_body.corner_radius = CornerRadius::ZERO;
+    // Rectangular content stays inside the rounded outer corners.
+    d.tab.tab_body.inner_margin = Margin {
+        bottom: 4,
+        left: 4,
+        right: 4,
+        top: 0,
+    };
     d.overlay.selection_color = ACCENT_SELECT.gamma_multiply(0.25);
     d
 }
