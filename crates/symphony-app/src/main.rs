@@ -1500,10 +1500,14 @@ impl SymphonyApp {
                 }
                 Some(1) => {
                     self.pending = None;
-                    if let Some(r) = &self.recovery {
-                        r.clear(&self.s.key);
+                    // Scene setup can be cancelled. Keep the previous scene
+                    // dirty and recoverable until the replacement succeeds.
+                    if p != Pending::New {
+                        if let Some(r) = &self.recovery {
+                            r.clear(&self.s.key);
+                        }
+                        self.s.saved_version = self.s.doc.version;
                     }
-                    self.s.saved_version = self.s.doc.version;
                     self.proceed(ctx, p);
                 }
                 Some(_) => self.pending = None,
