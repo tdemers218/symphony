@@ -3969,6 +3969,7 @@ dependencies = [
  "symphony-render",
  "symphony-ui",
  "symphony-vector",
+ "tempfile",
  "ureq",
 ]
 

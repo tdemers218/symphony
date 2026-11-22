@@ -31,4 +31,5 @@ symphony-vector = { path = "../symphony-vector" }
 ureq = "3"
 
 [dev-dependencies]
+tempfile = "3"
 egui_kittest = "0.37"

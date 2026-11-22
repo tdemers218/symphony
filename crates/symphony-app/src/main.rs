@@ -14,6 +14,7 @@ mod ui_tests;
 mod update;
 mod views;
 mod wallpaper;
+mod welcome;
 mod workspace;
 
 use std::path::PathBuf;
@@ -41,6 +42,8 @@ const AUTOSAVE_EVERY: f64 = 120.0;
 
 #[derive(Serialize, Deserialize)]
 struct Saved {
+    #[serde(default)]
+    recent_projects: Vec<PathBuf>,
     #[serde(default)]
     wallpaper: wallpaper::Choice,
     #[serde(default = "yes")]
@@ -108,7 +111,12 @@ const NOTICE_SECONDS: f64 = 4.0;
 /// Background save results: (version saved, path, result).
 type SaveResult = (u64, PathBuf, Result<(), String>);
 
+type RecoveredScene = (String, Option<PathBuf>, Scene);
+
 struct SymphonyApp {
+    welcome: Option<welcome::Welcome>,
+    recent_projects: Vec<PathBuf>,
+    recovery_scan: Option<Receiver<Vec<RecoveredScene>>>,
     wallpaper: wallpaper::Wallpaper,
     interface_animations: bool,
     s: Session,
@@ -132,7 +140,7 @@ struct SymphonyApp {
     frame_clock: f64,
     shot: Option<shot::Shot>,
     recovery: Option<Recovery>,
-    recovered: Vec<(String, Option<PathBuf>, Scene)>,
+    recovered: Vec<RecoveredScene>,
     pending: Option<Pending>,
     allow_close: bool,
     error: Option<String>,
@@ -218,6 +226,10 @@ impl SymphonyApp {
                 _ => wallpaper::Choice::Black,
             };
         }
+        let recent_projects = saved
+            .as_ref()
+            .map(|s| s.recent_projects.clone())
+            .unwrap_or_default();
         let interface_animations = saved.as_ref().is_none_or(|s| s.interface_animations);
         theme::set_motion(&cc.egui_ctx, interface_animations);
         let brush_size_cursor = saved.as_ref().is_some_and(|s| s.brush_size_cursor);
@@ -291,13 +303,23 @@ impl SymphonyApp {
             }
         }
         let recovery = recovery_dir().map(Recovery::new);
-        let recovered = match (&recovery, &shot) {
-            (Some(r), None) => r.pending(),
-            _ => Vec::new(),
-        };
+        let welcome = (shot.is_none() || std::env::var_os("SYMPHONY_SHOT_WELCOME").is_some())
+            .then(|| welcome::Welcome::new(false));
+        let recovery_scan = recovery_dir().filter(|_| shot.is_none()).map(|dir| {
+            let (tx, rx) = channel();
+            let ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(Recovery::new(dir).pending());
+                ctx.request_repaint();
+            });
+            rx
+        });
         let (save_tx, save_rx) = channel();
         let version = s.doc.version;
         SymphonyApp {
+            welcome,
+            recent_projects,
+            recovery_scan,
             wallpaper: wallpaper::Wallpaper::new(&cc.egui_ctx, wallpaper_choice),
             interface_animations,
             s,
@@ -319,7 +341,7 @@ impl SymphonyApp {
             frame_clock: 0.0,
             shot,
             recovery,
-            recovered,
+            recovered: Vec::new(),
             pending: None,
             allow_close: false,
             error: None,
@@ -382,9 +404,9 @@ impl SymphonyApp {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            Pending::New => self.replace_session(Session::new_scene()),
-            Pending::Open => self.open_dialog(false),
-            Pending::ImportHarmony => self.open_dialog(true),
+            Pending::New => self.welcome = Some(welcome::Welcome::new(true)),
+            Pending::Open => self.open_dialog(false, ctx),
+            Pending::ImportHarmony => self.open_dialog(true, ctx),
         }
     }
 
@@ -412,7 +434,7 @@ impl SymphonyApp {
         self.drawing.reset_view();
     }
 
-    fn open_dialog(&mut self, harmony: bool) {
+    fn open_dialog(&mut self, harmony: bool, ctx: &egui::Context) {
         let dialog = rfd::FileDialog::new();
         let path = if harmony {
             dialog
@@ -425,9 +447,14 @@ impl SymphonyApp {
                 .pick_folder()
         };
         let Some(path) = path else { return };
+        self.open_path(path, harmony, ctx);
+    }
+
+    fn open_path(&mut self, path: PathBuf, harmony: bool, ctx: &egui::Context) {
         // Read in the background; a loading dialog shows meanwhile (D17.1).
         let (tx, rx) = channel();
         let p = path.clone();
+        let ctx = ctx.clone();
         std::thread::spawn(move || {
             let result = if harmony {
                 symphony_io::harmony::import(&p)
@@ -435,6 +462,7 @@ impl SymphonyApp {
                 symphony_io::open(&p).map_err(|e| e.0)
             };
             let _ = tx.send(result);
+            ctx.request_repaint();
         });
         self.opening = Some(Opening {
             harmony,
@@ -444,6 +472,26 @@ impl SymphonyApp {
         });
     }
 
+    fn remember_project(&mut self, path: &std::path::Path) {
+        self.recent_projects.retain(|project| project != path);
+        self.recent_projects.insert(0, path.to_owned());
+        self.recent_projects.truncate(5);
+    }
+
+    fn poll_startup(&mut self) {
+        let Some(rx) = &self.recovery_scan else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(scenes) => {
+                self.recovered = scenes;
+                self.recovery_scan = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.recovery_scan = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
     fn poll_open(&mut self) {
         let Some(o) = &self.opening else { return };
         match o.rx.try_recv() {
@@ -451,6 +499,10 @@ impl SymphonyApp {
                 let harmony = o.harmony;
                 let path = (!harmony).then(|| o.path.clone());
                 self.opening = None;
+                if let Some(path) = &path {
+                    self.remember_project(path);
+                }
+                self.welcome = None;
                 self.replace_session(Session::from_doc(doc, path));
                 if harmony {
                     self.s.doc.version += 1;
@@ -502,6 +554,7 @@ impl SymphonyApp {
         match symphony_io::save(&self.s.doc, &path) {
             Ok(()) => {
                 self.s.saved_version = self.s.doc.version;
+                self.remember_project(&path);
                 self.s.path = Some(path);
                 if let Some(r) = &self.recovery {
                     r.clear(&self.s.key);
@@ -521,6 +574,7 @@ impl SymphonyApp {
             match result {
                 Ok(()) => {
                     self.s.saved_version = version;
+                    self.remember_project(&path);
                     self.s.path = Some(path);
                     self.s.notice = Some(format!("Saved {}", self.s.name()));
                     if !self.s.dirty() {
@@ -1481,6 +1535,7 @@ impl SymphonyApp {
                     next.key = key;
                     // Recovered work isn't saved yet, so it shows as edited.
                     next.saved_version = next.doc.version.wrapping_sub(1);
+                    self.welcome = None;
                     self.s = next;
                     self.autosaved_version = self.s.doc.version;
                 }
@@ -1610,10 +1665,47 @@ impl eframe::App for SymphonyApp {
             return;
         }
 
+        if ctx.input(|i| i.viewport().close_requested())
+            && self
+                .welcome
+                .as_ref()
+                .is_some_and(welcome::Welcome::creating)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+
         // Closing with unsaved work asks first.
         if ctx.input(|i| i.viewport().close_requested()) && self.s.dirty() && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending = Some(Pending::Quit);
+        }
+
+        self.poll_startup();
+        if self.welcome.is_some() {
+            self.last_time = Some(ctx.input(|i| i.time));
+            self.poll_saves();
+            self.poll_open();
+            if let Some(welcome) = self.welcome.as_mut() {
+                self.wallpaper.paint(ui);
+                match welcome.ui(
+                    ui,
+                    &self.recent_projects,
+                    self.recovery_scan.is_some(),
+                    self.opening.is_some(),
+                ) {
+                    Some(welcome::Action::Open) => self.open_dialog(false, &ctx),
+                    Some(welcome::Action::Recent(path)) => self.open_path(path, false, &ctx),
+                    Some(welcome::Action::Cancel) => self.welcome = None,
+                    Some(welcome::Action::Created(scene, path)) => {
+                        self.remember_project(&path);
+                        self.replace_session(Session::from_doc(*scene, Some(path)));
+                        self.welcome = None;
+                    }
+                    None => {}
+                }
+                self.dialogs(&ctx);
+                return;
+            }
         }
 
         let samples = match &self.pen {
@@ -1822,6 +1914,7 @@ impl eframe::App for SymphonyApp {
             return;
         }
         let saved = Saved {
+            recent_projects: self.recent_projects.clone(),
             wallpaper: self.wallpaper.choice.clone(),
             interface_animations: self.interface_animations,
             workspace: self.workspace,
