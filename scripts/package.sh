@@ -36,6 +36,7 @@ if [[ "$TARGET" == *apple* ]]; then
   mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
   cp "$WORDMARK_LICENSE" "$BUNDLE/Contents/Resources/OFL-Bricolage-Grotesque.txt"
   cp "$BIN/symphony-launcher" "$BUNDLE/Contents/MacOS/"
+  cp crates/symphony-app/assets/Symphony.icns "$BUNDLE/Contents/Resources/"
   cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,6 +46,7 @@ if [[ "$TARGET" == *apple* ]]; then
   <key>CFBundleIdentifier</key><string>io.github.tdemers218.symphony.launcher</string>
   <key>CFBundleExecutable</key><string>symphony-launcher</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>Symphony.icns</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>

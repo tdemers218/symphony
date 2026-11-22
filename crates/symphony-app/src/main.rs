@@ -3,6 +3,7 @@
 //! cards, and the status bar. Shortcuts come only from the keymap
 //! (ENGINEERING E4.3). Saving and autosave run off the main thread (E5.2).
 
+mod app_icon;
 mod brush_import;
 mod codec;
 mod keymap;
@@ -207,6 +208,8 @@ fn recovery_dir() -> Option<PathBuf> {
 
 impl SymphonyApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        #[cfg(target_os = "macos")]
+        app_icon::set_dock_icon();
         theme::apply(&cc.egui_ctx);
         // Dark window frame on every OS (DESIGN D12.3).
         cc.egui_ctx
@@ -2025,6 +2028,7 @@ fn viewport() -> egui::ViewportBuilder {
         })
         .unwrap_or([1440.0, 900.0]);
     let v = egui::ViewportBuilder::default()
+        .with_icon(app_icon::window_icon())
         .with_title("Symphony")
         .with_inner_size(size)
         .with_min_inner_size([960.0, 600.0]);
