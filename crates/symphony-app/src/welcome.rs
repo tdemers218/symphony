@@ -4,7 +4,7 @@ use std::{
     sync::mpsc::{self, Receiver, TryRecvError},
 };
 
-use eframe::egui::{self, Align2, FontId, Margin, Sense, Vec2};
+use eframe::egui::{self, Align2, Margin, Sense, Vec2};
 use symphony_core::doc::{Scene, Settings};
 use symphony_ui::{feedback, theme, widgets};
 
@@ -79,6 +79,18 @@ impl Welcome {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
         }
+        let backdrop = ui.max_rect();
+        // The banner is the wallpaper. Keep its caption behind the setup card.
+        ui.painter().text(
+            egui::pos2(
+                backdrop.left() + backdrop.width() * 0.75,
+                backdrop.center().y,
+            ),
+            Align2::CENTER_CENTER,
+            "Waiting for artists",
+            egui::FontId::proportional(19.0),
+            theme::TEXT_SECONDARY,
+        );
         let busy = preparing || opening || self.pending.is_some();
         let mut action = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -89,10 +101,10 @@ impl Welcome {
                 ui.vertical(|ui| {
                     ui.set_width(width);
                     ui.add_space(48.0);
-                    ui.label(egui::RichText::new("Symphony").size(34.0));
+                    ui.label(egui::RichText::new("Symphony").font(theme::wordmark()));
                     ui.add_space(16.0);
                     ui.horizontal_top(|ui| {
-                        let form_width = width * 0.54;
+                        let form_width = width * 0.53;
                         let card = egui::Frame::new()
                             .fill(theme::GLASS_PANEL)
                             .corner_radius(theme::GLASS_RADIUS)
@@ -151,8 +163,26 @@ impl Welcome {
                                         );
                                         ui.add_enabled_ui(!busy, |ui| {
                                             for path in recent {
+                                                let name = symphony_io::project_name(path);
+                                                let folder =
+                                                    path.parent().and_then(Path::file_name);
+                                                let text = folder.map_or_else(
+                                                    || name.clone(),
+                                                    |folder| {
+                                                        format!(
+                                                            "{name}   •   {}",
+                                                            folder.to_string_lossy()
+                                                        )
+                                                    },
+                                                );
+                                                let row = egui::Button::new(text)
+                                                    .min_size(Vec2::new(
+                                                        ui.available_width(),
+                                                        theme::ROW,
+                                                    ))
+                                                    .wrap_mode(egui::TextWrapMode::Truncate);
                                                 if ui
-                                                    .button(symphony_io::project_name(path))
+                                                    .add(row)
                                                     .on_hover_text(path.display().to_string())
                                                     .clicked()
                                                 {
@@ -164,10 +194,6 @@ impl Welcome {
                                 });
                             });
                         theme::glass_rim(ui.painter(), card.response.rect);
-                        let banner_width =
-                            (width - card.response.rect.width() - ui.spacing().item_spacing.x)
-                                .max(0.0);
-                        banner(ui, Vec2::new(banner_width, card.response.rect.height()));
                     });
                     ui.add_space(20.0);
                 });
@@ -246,11 +272,7 @@ impl Welcome {
                 ui.end_row();
                 ui.label("Timing");
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut self.settings.fps)
-                            .range(1.0..=120.0)
-                            .suffix(" fps"),
-                    );
+                    widgets::frame_rate(ui, "scene-fps", &mut self.settings.fps);
                     ui.add(
                         egui::DragValue::new(&mut self.settings.length)
                             .range(1..=100_000)
@@ -300,20 +322,6 @@ fn save_new(path: &Path, settings: Settings) -> Result<Scene, String> {
     scene.settings = settings;
     symphony_io::save(&scene, path).map_err(|e| e.0)?;
     Ok(scene)
-}
-
-fn banner(ui: &mut egui::Ui, size: Vec2) {
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, theme::GLASS_RADIUS, theme::GLASS_PANEL);
-    theme::glass_rim(painter, rect);
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        "Waiting for artists",
-        FontId::proportional(19.0),
-        theme::TEXT_SECONDARY,
-    );
 }
 
 #[cfg(test)]

@@ -28,6 +28,20 @@ pub fn primary_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> Response
     response
 }
 
+pub const FRAME_RATES: [f32; 4] = [12.0, 24.0, 30.0, 48.0];
+
+/// Common film and video rates. An imported scene's custom rate stays
+/// visible until the artist explicitly selects a preset.
+pub fn frame_rate(ui: &mut egui::Ui, id: &str, fps: &mut f32) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(format!("{fps} fps"))
+        .show_ui(ui, |ui| {
+            for rate in FRAME_RATES {
+                ui.selectable_value(fps, rate, format!("{rate:.0} fps"));
+            }
+        });
+}
+
 fn row(ui: &mut egui::Ui, label: &str) -> (Response, Rect) {
     let colour = if ui.is_enabled() {
         theme::TEXT_PRIMARY
