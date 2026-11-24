@@ -1284,7 +1284,15 @@ pub fn ui(
                 EStroke::NONE,
             ));
         }
-        if !state.display.paint(&painter, s, corners, preview) {
+        let hidden_text = state.text.as_ref().and_then(|draft| {
+            let drawing = s.doc.exposed(draft.layer, draft.frame)?;
+            let object = draft.editing.as_ref()?;
+            Some((drawing, object.glyphs.clone()))
+        });
+        if !state
+            .display
+            .paint(&painter, s, corners, preview, hidden_text)
+        {
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,

@@ -1,7 +1,6 @@
 //! The search box (Tab): a field centred on the mouse that shows results as
 //! you type. Ranking and the plain-language rules live in `search.rs`. It
-//! only fades in and out (the shared Appear and Dismiss motions, opacity
-//! only): no growing or sliding.
+//! opens on the field, then expands to show contextual recommendations.
 
 use eframe::egui::{self, Align2, Id, Pos2, Rect, Vec2};
 use symphony_ui::motion;
@@ -20,6 +19,8 @@ pub struct PaletteState {
     selected: usize,
     scroll_offset: f32,
     first_frame: bool,
+    opened_at: Option<f64>,
+    opened_empty: bool,
     /// Closing: fading out, no longer taking input.
     pub closing: bool,
     /// Waiting for a new shortcut for this action (from the right-click
@@ -69,6 +70,8 @@ impl PaletteState {
             selected: 0,
             scroll_offset: 0.0,
             first_frame: true,
+            opened_at: None,
+            opened_empty: false,
             closing: false,
             recording: None,
             clash: None,
@@ -97,7 +100,7 @@ fn placeholder(here: Option<View>) -> &'static str {
 
 const WIDTH: f32 = 560.0;
 const ROWS: usize = 16;
-const SUGGESTED_ROWS: usize = 16;
+const RECOMMEND_AFTER: f64 = 0.5;
 const ROW_H: f32 = 34.0;
 const FIELD_H: f32 = 30.0;
 
@@ -205,18 +208,35 @@ pub fn ui(
         return Outcome::Closed;
     }
 
-    // With no query, show recent and contextual commands. Typed queries
-    // keep phrase commands first and retain normal relevance ordering.
     let typed = !st.query.trim().is_empty();
+    let now = ctx.input(|input| input.time);
+    if st.opened_at.is_none() {
+        st.opened_at = Some(now);
+        st.opened_empty = !typed;
+    }
+    let elapsed = (now - st.opened_at.unwrap_or(now)).max(0.0);
+    let recommend = elapsed >= RECOMMEND_AFTER;
+    if !typed && !recommend && !st.closing {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+            RECOMMEND_AFTER - elapsed,
+        ));
+    }
+
     let here = st.here.or(Some(View::Camera));
     let mut results = if typed {
         search::phrase(&st.query)
     } else {
         Vec::new()
     };
-    let hits = search::rank(entries, &st.query, here, uses);
-    let limit = if typed { usize::MAX } else { SUGGESTED_ROWS };
-    results.extend(hits.iter().take(limit).map(|h| entries[h.index].clone()));
+    if typed || recommend {
+        let hits = search::rank(entries, &st.query, here, uses);
+        let limit = if typed { usize::MAX } else { ROWS };
+        results.extend(
+            hits.iter()
+                .take(limit)
+                .map(|hit| entries[hit.index].clone()),
+        );
+    }
     st.selected = st.selected.min(results.len().saturating_sub(1));
 
     // Tab toggles it closed again; Esc closes it too.
@@ -243,15 +263,32 @@ pub fn ui(
 
     let screen = ctx.content_rect();
     let field_width = WIDTH.min((screen.width() - 36.0).max(40.0));
-    let max_list_h = (screen.height() - FIELD_H - 36.0).max(ROW_H);
+    let max_list_h = (screen.height() - FIELD_H - 72.0).max(ROW_H);
     let rows = results.len().clamp(1, ROWS);
-    let list_h = (rows as f32 * ROW_H).min(max_list_h);
+    let target_height = (rows as f32 * ROW_H).min(max_list_h);
+    let list_h = if typed {
+        target_height
+    } else if !recommend || results.is_empty() {
+        0.0
+    } else if motion::enabled(ctx) {
+        let elapsed = (elapsed - RECOMMEND_AFTER) / motion::Motion::Expand.seconds();
+        if elapsed < 1.0 {
+            ctx.request_repaint();
+        }
+        target_height * motion::Motion::Expand.ease(elapsed as f32)
+    } else {
+        target_height
+    };
 
-    // Centred on the mouse horizontally, just below it, kept in the window;
-    // it simply fades in and out (Appear and Dismiss, opacity only).
+    // Keep the field in the same place when recommendations expand.
+    let reserved_list = if st.opened_empty {
+        (ROWS as f32 * ROW_H).min(max_list_h)
+    } else {
+        target_height
+    };
     let opacity = shown;
     let box_w = field_width + 16.0;
-    let full_h = FIELD_H + 20.0 + list_h;
+    let full_h = FIELD_H + 54.0 + reserved_list;
     let x =
         (st.at.x - box_w / 2.0).clamp(screen.left() + 8.0, (screen.right() - box_w - 8.0).max(8.0));
     let y = (st.at.y + 12.0).clamp(
@@ -358,6 +395,9 @@ pub fn ui(
                         );
                         return;
                     }
+                    // The popup's last measured size can be only one row.
+                    // Reserve space so the expanded scroll list receives input.
+                    ui.set_min_height(ui.min_size().y + list_h);
                     let mut scroll = egui::ScrollArea::vertical()
                         .id_salt("search-results")
                         // Grow a previously short popup when its query changes.
@@ -724,6 +764,59 @@ mod tests {
         assert!(keymap::is_remapped(profile, Action::MirrorView));
         keymap::reset(profile, Action::MirrorView);
         assert!(keymap::binding(profile, Action::MirrorView).is_none());
+    }
+
+    #[test]
+    fn blank_search_expands_after_half_a_second() {
+        use egui_kittest::kittest::Queryable;
+        let state = PaletteState::new(Pos2::new(390.0, 54.0), Some(View::Timeline));
+        let entries = vec![
+            Entry::new(
+                "Context result",
+                search::Kind::Action,
+                Command::GoToFrame(2),
+                "context",
+            )
+            .ctx(&[View::Timeline]),
+            Entry::new(
+                "Frequent result",
+                search::Kind::Action,
+                Command::GoToFrame(3),
+                "frequent",
+            ),
+            Entry::new(
+                "Other result",
+                search::Kind::Action,
+                Command::GoToFrame(4),
+                "other",
+            ),
+        ];
+        let mut harness = Harness::builder()
+            .with_step_dt(0.1)
+            .with_size(Vec2::new(800.0, 620.0))
+            .with_context_setup(|ctx| {
+                theme::apply(ctx);
+                theme::set_motion(ctx, false);
+            })
+            .build_ui_state(
+                |ui, (state, entries)| {
+                    super::ui(
+                        ui.ctx(),
+                        state,
+                        entries,
+                        &|key| if key == "frequent" { 5 } else { 0 },
+                        Profile::Symphony,
+                    );
+                },
+                (state, entries),
+            );
+        harness.run_steps(2);
+        assert!(harness.query_by_label("Context result").is_none());
+        assert!(harness.query_by_label("Frequent result").is_none());
+        harness.run_steps(6);
+        harness.get_by_label("Context result");
+        harness.get_by_label("Frequent result");
+        assert!(harness.query_by_label("Other result").is_none());
     }
 
     #[test]

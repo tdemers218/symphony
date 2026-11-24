@@ -14,6 +14,7 @@ struct RenderKey {
     frame: u32,
     stage: [u32; 2],
     selection: Option<(Id, Vec<Id>, Affine)>,
+    hidden_text: Option<(Id, Vec<Id>)>,
 }
 
 type Rendered = (RenderKey, Option<(u32, u32, Vec<u8>)>);
@@ -53,6 +54,7 @@ impl Cache {
         s: &Session,
         corners: [Pos2; 4],
         transform: Option<Affine>,
+        hidden_text: Option<(Id, Vec<Id>)>,
     ) -> bool {
         let selection = if s.tool == Tool::Select {
             s.selection
@@ -69,6 +71,7 @@ impl Cache {
             frame: s.frame,
             stage,
             selection,
+            hidden_text,
         };
         // Collect a finished render.
         if let Some((_, rx)) = &self.job {
@@ -112,12 +115,19 @@ impl Cache {
         if wanted && self.job.is_none() {
             let scale = (1920.0 / stage[0].max(stage[1]) as f32).min(1.0);
             let [width, height] = stage.map(|size| (size as f32 * scale).round().max(1.0) as u32);
-            let scene = std::sync::Arc::new(s.doc.clone());
+            let mut scene = s.doc.clone();
             let frame = s.frame;
             let job_key = key.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             let ctx = painter.ctx().clone();
             std::thread::spawn(move || {
+                if let Some((drawing, glyphs)) = &job_key.hidden_text {
+                    if let Some(drawing) = scene.drawings.get_mut(drawing) {
+                        drawing
+                            .strokes
+                            .retain(|stroke| !glyphs.contains(&stroke.id));
+                    }
+                }
                 let preview = job_key
                     .selection
                     .as_ref()
