@@ -832,7 +832,6 @@ impl Graph {
                         field: crate::warp::WarpField::Bone(Box::new(field)),
                     });
                     outer = Affine::IDENTITY;
-                    lines = crate::warp::WarpLines::Shape;
                 }
                 NodeKind::MeshWarp(w) => {
                     if let Some(field) = w.field_at(frame) {

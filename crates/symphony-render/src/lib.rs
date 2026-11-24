@@ -961,6 +961,7 @@ mod tests {
         assert_eq!(camera.pixel(75, 50).unwrap().alpha(), 255);
         assert_eq!(camera.pixel(100, 78).unwrap().alpha(), 255);
         assert_eq!(camera.pixel(128, 50).unwrap().alpha(), 0);
+        assert_eq!(camera.pixel(80, 72).unwrap().alpha(), 0);
         assert_eq!(&export[(100, 78)].0[..3], &scene.palette.swatches[0].rgb);
 
         scene.graph.disconnect_inputs(layer.peg);
