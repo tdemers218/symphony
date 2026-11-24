@@ -1658,6 +1658,8 @@ impl Session {
                     n.kind,
                     symphony_core::graph::NodeKind::Peg(_)
                         | symphony_core::graph::NodeKind::MeshWarp(_)
+                        | symphony_core::graph::NodeKind::Skeleton(_)
+                        | symphony_core::graph::NodeKind::Bone(_)
                 )
             });
         if peg {
@@ -1695,7 +1697,12 @@ impl Session {
         }
         if !matches!(
             self.doc.graph.node(id).map(|node| &node.kind),
-            Some(NodeKind::Peg(_) | NodeKind::MeshWarp(_))
+            Some(
+                NodeKind::Peg(_)
+                    | NodeKind::MeshWarp(_)
+                    | NodeKind::Skeleton(_)
+                    | NodeKind::Bone(_)
+            )
         ) {
             return;
         }
@@ -2046,30 +2053,31 @@ impl Session {
                     });
                 }
             }
-            let NodeKind::Peg(before) = &node.kind else {
-                continue;
-            };
-            let mut after = before.clone();
-            for value in [
-                &mut after.x,
-                &mut after.y,
-                &mut after.z,
-                &mut after.rotation,
-            ]
-            .into_iter()
-            .chain(after.scale_x.iter_mut())
-            .chain(after.scale_y.iter_mut())
-            {
+            let mut after = node.clone();
+            let shift = |value: &mut Value| {
                 if let Value::Keys(keys) = value {
                     for key in keys.iter_mut().filter(|key| key.frame >= from) {
                         key.frame = key.frame.saturating_add(count);
                     }
                 }
+            };
+            match &mut after.kind {
+                NodeKind::Peg(peg) | NodeKind::Skeleton(peg) => {
+                    for value in [&mut peg.x, &mut peg.y, &mut peg.z, &mut peg.rotation]
+                        .into_iter()
+                        .chain(peg.scale_x.iter_mut())
+                        .chain(peg.scale_y.iter_mut())
+                    {
+                        shift(value);
+                    }
+                }
+                NodeKind::Bone(bone) => bone.values_mut().for_each(shift),
+                _ => continue,
             }
-            if &after != before {
-                edits.push(Edit::SetPeg {
-                    node: id,
-                    before: before.clone(),
+            if &after != node {
+                edits.push(Edit::SetNodeProperties {
+                    id,
+                    before: node.clone(),
                     after,
                 });
             }

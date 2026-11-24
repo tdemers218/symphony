@@ -2337,6 +2337,18 @@ impl SymphonyApp {
             .ctx(&node_views),
         );
         if let Some(id) = views::node::selected_node(&self.s) {
+            if let Some(label) = views::node::smart_joint_label(&self.s, id) {
+                out.push(
+                    Entry::new(
+                        label,
+                        Kind::Node,
+                        Command::ToggleSmartJoint(id),
+                        "node.smart-joint",
+                    )
+                    .words("inverse kinematics ik bone rig elbow knee")
+                    .ctx(&node_views),
+                );
+            }
             if let Some(label) = views::node::drawing_conversion_label(&self.s, id) {
                 out.push(
                     Entry::new(
@@ -2352,13 +2364,13 @@ impl SymphonyApp {
         }
         for kind in views::node::addable_nodes() {
             let name = views::node::kind_label(&kind);
-            let aliases = if matches!(
-                kind,
-                symphony_core::graph::NodeKind::Effect(symphony_core::graph::Effect::Blur { .. })
-            ) {
-                "node create insert effect box gaussian motion directional radial spin zoom blur"
-            } else {
-                "node create insert effect"
+            use symphony_core::graph::{Effect, NodeKind};
+            let aliases = match kind {
+                NodeKind::Skeleton(_) => "node create start rig skeleton puppet",
+                NodeKind::Bone(_) => "node create extend rig bone limb joint",
+                NodeKind::Effect(Effect::Blur { .. }) =>
+                    "node create insert effect box gaussian motion directional radial spin zoom blur",
+                _ => "node create insert effect",
             };
             let mut entry = Entry::new(
                 &format!("Add {name}"),
@@ -2878,6 +2890,7 @@ impl SymphonyApp {
             Command::SetArt(a) => self.s.set_art(a),
             Command::ArrangeNodes => views::node::arrange(&mut self.s, &mut self.node_view),
             Command::ConvertDrawing(id) => views::node::convert_drawing(&mut self.s, id),
+            Command::ToggleSmartJoint(id) => views::node::toggle_smart_joint(&mut self.s, id),
             Command::AddDrawingNode => {
                 self.s.add_layer();
                 if let Some(layer) = self.s.doc.layers.get(self.s.selected) {

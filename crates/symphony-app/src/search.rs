@@ -44,6 +44,7 @@ pub enum Command {
     SetArt(symphony_core::stroke::ArtLayer),
     ArrangeNodes,
     ConvertDrawing(symphony_core::graph::NodeId),
+    ToggleSmartJoint(symphony_core::graph::NodeId),
     AddDrawingNode,
     AddNode(symphony_core::graph::NodeKind),
 }

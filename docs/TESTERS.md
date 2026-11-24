@@ -122,6 +122,27 @@ the camera forward. Near artwork moves faster than far artwork, and
 Camera and exports use the same projection. Composite port order still
 controls stacking.
 
+## Pose a skeleton rig
+
+In Node View or Tab Search, choose **Add Skeleton** or **Add Bone** to
+start with a connected Skeleton and Bone. Select a Bone and choose
+**Add Bone** again to extend the chain. The Skeleton moves the whole rig.
+
+In **Bone properties → Rest pose and deformation**, set the length and
+rest angle over the artwork. Set the root origin on the first bone.
+Connect a Bone’s output to one or more Drawing inputs. To keep an
+existing drawing peg, connect the Bone to that peg instead. Artwork is
+editable in Drawing view and bones are visible as controls in Camera.
+
+With a Bone selected, drag its tip in Camera to pose it. Right-click the
+joint where two bones meet and choose **Make smart joint**. Drag the
+square target at the end of the second bone to pose both bones together.
+Use **Flip bend** in Bone properties to choose the direction of the
+elbow or knee. Use **Auto-key** or the Timeline’s **K** to animate the rig.
+Bones can be animated without artwork and are excluded from exports.
+Vector artwork bends at the joint. Imported pictures follow their bone
+as rigid artwork.
+
 ## Timeline keys and frames
 
 In Timeline, press **K** or click the diamond-plus button to set a

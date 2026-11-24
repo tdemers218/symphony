@@ -57,6 +57,7 @@ pub struct CanvasState {
     pub render_effects: bool,
     /// The selected Mesh Warp's grid, being edited.
     warp_edit: super::warp_edit::WarpEdit,
+    rig_edit: super::rig_edit::RigEdit,
     /// Text being typed with the Text tool.
     text: Option<TextDraft>,
     /// Drawings bent by Mesh Warps, by drawing: rebuilt only when the
@@ -83,6 +84,7 @@ impl Default for CanvasState {
             display: Default::default(),
             render_effects: true,
             warp_edit: Default::default(),
+            rig_edit: Default::default(),
             text: None,
             bent: Default::default(),
         }
@@ -1090,7 +1092,7 @@ pub fn ui(
             .ok()
     };
     // Drawings bent by Mesh Warps: (drawing, its warp).
-    // (drawing, its warp, stage transform for the bent copy)
+    // (drawing, its warp, projection for both vector and raster artwork)
     let mut warps: Vec<(Id, std::sync::Arc<symphony_core::warp::Warp>, Affine)> = Vec::new();
     let items: Vec<select::Item> = if drawing_only {
         s.doc
@@ -1112,7 +1114,7 @@ pub fn ui(
                 let plane = s.doc.project_plane(s.frame, item.depth)?;
                 let transform = plane.compose(item.transform);
                 if let Some(w) = &item.warp {
-                    warps.push((item.drawing, w.clone(), plane.compose(w.outer())));
+                    warps.push((item.drawing, w.clone(), plane));
                 }
                 Some((layer, item.drawing, transform))
             })
@@ -1139,10 +1141,17 @@ pub fn ui(
             };
             let world = view.compose(*m);
             if let Some(img) = original.image {
+                let image_world = warps
+                    .iter()
+                    .find(|(w, _, _)| w == d)
+                    .and_then(|(_, warp, stage)| {
+                        Some(view.compose(*stage).compose(warp.raster_transform()?))
+                    })
+                    .unwrap_or(world);
                 state
                     .strokes
                     .vectors
-                    .paint_image(&painter, &s.doc, img, world);
+                    .paint_image(&painter, &s.doc, img, image_world);
             }
             // Under a Mesh Warp: the bent copy, drawn with the warp's
             // outer transform (on the same plane).
@@ -1150,7 +1159,7 @@ pub fn ui(
             let (dr, world) = match warps.iter().find(|(w, _, _)| w == d) {
                 Some((_, warp, stage)) => {
                     bent_copy = bent_drawing(&mut state.bent, s.doc.version, original, warp);
-                    (&*bent_copy, view.compose(*stage))
+                    (&*bent_copy, view.compose(*stage).compose(warp.outer()))
                 }
                 None => (original, world),
             };
@@ -1279,7 +1288,17 @@ pub fn ui(
     let navigating_now = space || s.tool == Tool::Hand;
     let warp_busy = !navigating_now
         && super::warp_edit::ui(ui, &response, &painter, s, &mut state.warp_edit, view);
-    if matches!(s.tool, Tool::Select | Tool::Transform) && !navigating_now && !warp_busy {
+    let rig_busy = if !navigating_now && !drawing_only {
+        super::rig_edit::ui(ui, &response, &painter, s, &mut state.rig_edit, view)
+    } else {
+        super::rig_edit::finish(s, &mut state.rig_edit);
+        false
+    };
+    if matches!(s.tool, Tool::Select | Tool::Transform)
+        && !navigating_now
+        && !warp_busy
+        && !rig_busy
+    {
         select::ui(ui, &response, &painter, s, &mut state.select, view, &items);
     } else {
         state.select.hover = None;

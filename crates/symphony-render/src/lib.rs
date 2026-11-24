@@ -288,7 +288,12 @@ fn paint_drawing(
     let m = view.compose(project).compose(item.transform);
     // An imported image sits under everything else in the drawing.
     if let Some(img) = d.image {
-        paint_image(pix, scene, img, m);
+        let transform = item
+            .warp
+            .as_deref()
+            .and_then(|warp| warp.raster_transform())
+            .map_or(m, |raster| view.compose(project).compose(raster));
+        paint_image(pix, scene, img, transform);
     }
     // Under Mesh Warps: draw the drawing bent (pictures aren't bent).
     let bent;
@@ -921,6 +926,47 @@ mod tests {
                 .alpha(),
             255
         );
+    }
+
+    #[test]
+    fn camera_and_export_render_posed_artwork_without_bone_controls() {
+        use symphony_core::{anim::Value, graph::NodeKind, rig::Bone};
+        let mut scene = scene_with_line();
+        let layer = scene.layers[0];
+        let root = scene
+            .graph
+            .add("Skeleton", NodeKind::Skeleton(Default::default()));
+        let upper = scene.graph.add(
+            "Upper",
+            NodeKind::Bone(Bone {
+                origin: [-50.0, 0.0],
+                length: 50.0,
+                ..Bone::default()
+            }),
+        );
+        let lower = scene.graph.add(
+            "Lower",
+            NodeKind::Bone(Bone {
+                length: 50.0,
+                rotation: Value::Constant(90.0),
+                bend_radius: 12.0,
+                ..Bone::default()
+            }),
+        );
+        scene.graph.connect(root, upper, 0);
+        scene.graph.connect(upper, lower, 0);
+        scene.graph.connect(lower, layer.peg, 0);
+        let camera = render_camera(&scene, 1, 200, 100, None).unwrap();
+        let export = render_frame(&scene, 1, 200, 100).unwrap();
+        assert_eq!(camera.pixel(75, 50).unwrap().alpha(), 255);
+        assert_eq!(camera.pixel(100, 78).unwrap().alpha(), 255);
+        assert_eq!(camera.pixel(128, 50).unwrap().alpha(), 0);
+        assert_eq!(&export[(100, 78)].0[..3], &scene.palette.swatches[0].rgb);
+
+        scene.graph.disconnect_inputs(layer.peg);
+        scene.graph.connect(upper, layer.peg, 0);
+        let export_with_empty_lower = render_frame(&scene, 1, 200, 100).unwrap();
+        assert_eq!(export_with_empty_lower[(100, 78)].0, [255; 4]);
     }
 
     #[test]

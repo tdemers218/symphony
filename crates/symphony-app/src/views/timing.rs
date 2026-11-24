@@ -358,7 +358,12 @@ fn layer_chain(s: &Session, layer: usize) -> (Vec<NodeId>, Vec<NodeId>) {
     while let Some(up) = graph.input(cur, 0) {
         if matches!(
             kind_of(s, up),
-            Some(NodeKind::Peg(_) | NodeKind::MeshWarp(_))
+            Some(
+                NodeKind::Peg(_)
+                    | NodeKind::MeshWarp(_)
+                    | NodeKind::Skeleton(_)
+                    | NodeKind::Bone(_)
+            )
         ) && !pegs.contains(&up)
         {
             pegs.push(up);
@@ -642,12 +647,17 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                 .flat_map(|keys| keys.keys().copied()),
         );
         match &node.kind {
-            NodeKind::Peg(peg) => {
+            NodeKind::Peg(peg) | NodeKind::Skeleton(peg) => {
                 for value in [&peg.x, &peg.y, &peg.z, &peg.rotation]
                     .into_iter()
                     .chain(peg.scale_x.iter())
                     .chain(peg.scale_y.iter())
                 {
+                    frames.extend(value.keys().iter().map(|key| key.frame));
+                }
+            }
+            NodeKind::Bone(bone) => {
+                for value in bone.values() {
                     frames.extend(value.keys().iter().map(|key| key.frame));
                 }
             }

@@ -188,6 +188,8 @@ pub fn kind_label(kind: &NodeKind) -> &'static str {
     match kind {
         NodeKind::Drawing { .. } => "Drawing",
         NodeKind::Peg(_) => "Peg",
+        NodeKind::Skeleton(_) => "Skeleton",
+        NodeKind::Bone(_) => "Bone",
         NodeKind::MeshWarp(_) => "Mesh Warp",
         NodeKind::Composite => "Composite",
         NodeKind::Display => "Camera",
@@ -224,6 +226,8 @@ fn effect_nodes() -> [NodeKind; 6] {
 pub fn addable_nodes() -> impl Iterator<Item = NodeKind> {
     [
         NodeKind::Peg(Default::default()),
+        NodeKind::Skeleton(Default::default()),
+        NodeKind::Bone(Default::default()),
         mesh_warp(1920, 1080),
         NodeKind::Composite,
     ]
@@ -455,6 +459,10 @@ pub fn insert_near(s: &mut Session, target: NodeId, kind: NodeKind) {
 }
 
 fn add_node(s: &mut Session, kind: NodeKind, position: [f32; 2]) {
+    if matches!(kind, NodeKind::Skeleton(_) | NodeKind::Bone(_)) {
+        add_rig_node(s, kind, position);
+        return;
+    }
     // Placed clear of the others from the start (one undo step).
     let position = free_spot(s, position, W);
     let id = s.doc.graph.next_id();
@@ -470,6 +478,124 @@ fn add_node(s: &mut Session, kind: NodeKind, position: [f32; 2]) {
             },
             position,
         }],
+    );
+    s.select_graph_node(id, true);
+}
+
+fn add_rig_node(s: &mut Session, kind: NodeKind, position: [f32; 2]) {
+    let parent = selected_node(s).filter(|&id| {
+        matches!(kind, NodeKind::Bone(_))
+            && s.doc
+                .graph
+                .node(id)
+                .is_some_and(|node| matches!(node.kind, NodeKind::Skeleton(_) | NodeKind::Bone(_)))
+    });
+    let first = s.doc.graph.next_id();
+    let position = free_spot(s, position, W);
+    let mut edits = Vec::new();
+    let make_node = |id, kind: NodeKind, position| Edit::AddNode {
+        id,
+        node: Node {
+            name: kind_label(&kind).into(),
+            kind,
+            enabled: true,
+        },
+        position,
+    };
+    let (parent, bone) = if let Some(parent) = parent {
+        (parent, first)
+    } else {
+        edits.push(make_node(
+            first,
+            NodeKind::Skeleton(Default::default()),
+            position,
+        ));
+        (first, NodeId(first.0 + 1))
+    };
+    let bone_at = if first == bone {
+        position
+    } else {
+        free_spot_with(
+            s,
+            [position[0], position[1] + H + 28.0],
+            W,
+            Some((first, position)),
+        )
+    };
+    edits.push(make_node(bone, NodeKind::Bone(Default::default()), bone_at));
+    let before = s.doc.graph.links().to_vec();
+    let mut after = before.clone();
+    after.push(Link {
+        from: parent,
+        to: bone,
+        port: 0,
+    });
+    edits.push(Edit::RewireNodes {
+        before,
+        after,
+        was_custom: s.doc.custom_wiring,
+    });
+    s.history.apply(
+        &mut s.doc,
+        if first == bone {
+            "Add bone"
+        } else {
+            "Add skeleton"
+        },
+        edits,
+    );
+    s.select_graph_node(bone, true);
+}
+
+pub fn smart_joint_label(s: &Session, id: NodeId) -> Option<&'static str> {
+    let bone = s.doc.graph.bone(id)?;
+    if s.doc.graph.parent_bone(id).is_some() && bone.smart.is_some() {
+        Some("Remove smart joint")
+    } else if s.doc.graph.can_make_smart(id) {
+        Some("Make smart joint")
+    } else {
+        None
+    }
+}
+
+pub fn toggle_smart_joint(s: &mut Session, id: NodeId) {
+    use symphony_core::{anim::Value, rig::SmartJoint};
+    let Some(label) = smart_joint_label(s, id) else {
+        return;
+    };
+    let Some(before) = s.doc.graph.node(id).cloned() else {
+        return;
+    };
+    let mut after = before.clone();
+    let NodeKind::Bone(bone) = &mut after.kind else {
+        return;
+    };
+    if bone.smart.is_some() {
+        bone.smart = None;
+    } else {
+        let Some(pose) = s.doc.graph.bone_pose(id, s.frame) else {
+            return;
+        };
+        let Some(basis) = s
+            .doc
+            .graph
+            .smart_target_basis(id, s.frame)
+            .and_then(|m| m.inverse())
+        else {
+            return;
+        };
+        let (x, y) = pose.tip();
+        let (x, y) = basis.apply(x, y);
+        let angle = bone.rest_angle + bone.rotation.at(s.frame);
+        bone.smart = Some(SmartJoint {
+            target: [Value::Constant(x), Value::Constant(y)],
+            flip: angle.to_radians().sin() < 0.0,
+        });
+    }
+    s.history.apply(
+        &mut s.doc,
+        label,
+        vec![Edit::SetNodeProperties { id, before, after }],
     );
     s.select_graph_node(id, true);
 }
@@ -823,6 +949,8 @@ pub fn ui(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState) {
             }
             for kind in [
                 NodeKind::Peg(Default::default()),
+                NodeKind::Skeleton(Default::default()),
+                NodeKind::Bone(Default::default()),
                 mesh_warp(s.doc.settings.width, s.doc.settings.height),
                 NodeKind::Composite,
             ] {
@@ -884,7 +1012,7 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
     ui.checkbox(&mut draft.node.enabled, "Enabled");
     ui.separator();
     match &mut draft.node.kind {
-        NodeKind::Peg(peg) => {
+        NodeKind::Peg(peg) | NodeKind::Skeleton(peg) => {
             peg_value(ui, "Position X", &mut peg.x, s.frame, s.animate);
             peg_value(ui, "Position Y", &mut peg.y, s.frame, s.animate);
             peg_value(ui, "Rotation", &mut peg.rotation, s.frame, s.animate);
@@ -905,6 +1033,56 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
                     ui.add(egui::DragValue::new(&mut peg.pivot.0).prefix("X "));
                     ui.add(egui::DragValue::new(&mut peg.pivot.1).prefix("Y "));
                 });
+            });
+        }
+        NodeKind::Bone(bone) => {
+            let parent = s.doc.graph.parent_bone(draft.id);
+            let controller = s.doc.graph.smart_controller(draft.id, s.frame);
+            if let Some(joint) = bone.smart.as_mut().filter(|_| parent.is_some()) {
+                peg_value(ui, "Target X", &mut joint.target[0], s.frame, s.animate);
+                peg_value(ui, "Target Y", &mut joint.target[1], s.frame, s.animate);
+                ui.checkbox(&mut joint.flip, "Flip bend");
+            } else if let Some(owner) = controller.filter(|&id| id != draft.id) {
+                if ui.button("Select smart joint target").clicked() {
+                    s.select_graph_node(owner, true);
+                }
+            } else {
+                peg_value(ui, "Rotation", &mut bone.rotation, s.frame, s.animate);
+            }
+            if let Some(label) = smart_joint_label(s, draft.id) {
+                if ui.button(label).clicked() {
+                    toggle_smart_joint(s, draft.id);
+                    if let Some(current) = PropertyDraft::new(s, draft.id) {
+                        *draft = current;
+                    }
+                    return;
+                }
+            }
+            ui.collapsing("Rest pose and deformation", |ui| {
+                if parent.is_none() {
+                    ui.horizontal(|ui| {
+                        ui.label("Root origin");
+                        ui.add(egui::DragValue::new(&mut bone.origin[0]).prefix("X "));
+                        ui.add(egui::DragValue::new(&mut bone.origin[1]).prefix("Y "));
+                    });
+                }
+                ui.add(
+                    egui::DragValue::new(&mut bone.length)
+                        .range(1.0..=100_000.0)
+                        .prefix("Length "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut bone.rest_angle)
+                        .prefix("Rest angle ")
+                        .suffix("°"),
+                );
+                if parent.is_some() {
+                    ui.add(
+                        egui::DragValue::new(&mut bone.bend_radius)
+                            .range(0.0..=100_000.0)
+                            .prefix("Bend radius "),
+                    );
+                }
             });
         }
         NodeKind::MeshWarp(warp) => {
@@ -1211,8 +1389,10 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
     // Pegs apply live, so the drawing moves as you drag a value: their
     // values carry their own keys (Auto-key writes them as you edit), so
     // the node itself is what changes. One drag is one undo step.
-    if matches!(draft.node.kind, NodeKind::Peg(_) | NodeKind::MeshWarp(_))
-        && draft.node.kind != draft.initial.kind
+    if matches!(
+        draft.node.kind,
+        NodeKind::Peg(_) | NodeKind::Skeleton(_) | NodeKind::Bone(_) | NodeKind::MeshWarp(_)
+    ) && draft.node.kind != draft.initial.kind
         && draft.node.enabled == draft.initial.enabled
     {
         if let Some(before) = s.doc.graph.node(draft.id).cloned() {
@@ -1220,7 +1400,7 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
             after.kind = draft.node.kind.clone();
             s.history.apply_merged(
                 &mut s.doc,
-                "Change peg",
+                "Change transform",
                 &format!("node-props-{}", draft.id.0),
                 Edit::SetNodeProperties {
                     id: draft.id,
@@ -1246,7 +1426,10 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
     let changed =
         (draft.node != draft.initial || camera_changed) && !draft.node.name.trim().is_empty();
     let keyed = s.doc.graph.has_key(draft.id, s.frame);
-    let has_staged_controls = !matches!(draft.node.kind, NodeKind::Peg(_) | NodeKind::MeshWarp(_));
+    let has_staged_controls = !matches!(
+        draft.node.kind,
+        NodeKind::Peg(_) | NodeKind::Skeleton(_) | NodeKind::Bone(_) | NodeKind::MeshWarp(_)
+    );
     ui.horizontal_wrapped(|ui| {
         if (has_staged_controls || changed)
             && ui
@@ -1332,7 +1515,7 @@ fn apply_properties(s: &mut Session, draft: &mut PropertyDraft, key: bool, delet
                 after: after_keys,
             });
         }
-        if let NodeKind::Peg(peg) = if delete {
+        if let NodeKind::Peg(peg) | NodeKind::Skeleton(peg) = if delete {
             &before.kind
         } else {
             &draft.node.kind
@@ -1354,7 +1537,26 @@ fn apply_properties(s: &mut Session, draft: &mut PropertyDraft, key: bool, delet
                     value.set_key(s.frame, value.at(s.frame));
                 }
             }
-            after.kind = NodeKind::Peg(peg);
+            after.kind = if matches!(before.kind, NodeKind::Skeleton(_)) {
+                NodeKind::Skeleton(peg)
+            } else {
+                NodeKind::Peg(peg)
+            };
+        }
+        if let NodeKind::Bone(bone) = if delete {
+            &before.kind
+        } else {
+            &draft.node.kind
+        } {
+            let mut bone = bone.clone();
+            for value in bone.values_mut() {
+                if delete {
+                    value.remove_key(s.frame);
+                } else {
+                    value.set_key(s.frame, value.at(s.frame));
+                }
+            }
+            after.kind = NodeKind::Bone(bone);
         }
         if let NodeKind::MeshWarp(warp) = if delete {
             &before.kind
@@ -1637,6 +1839,15 @@ fn make_room(
 /// The nearest place to `at` where a new card of `width` overlaps none
 /// of the existing ones (it moves; they don't).
 fn free_spot(s: &Session, at: [f32; 2], width: f32) -> [f32; 2] {
+    free_spot_with(s, at, width, None)
+}
+
+fn free_spot_with(
+    s: &Session,
+    at: [f32; 2],
+    width: f32,
+    pending: Option<(NodeId, [f32; 2])>,
+) -> [f32; 2] {
     let defaults = default_positions(s);
     let mut positions: BTreeMap<NodeId, Vec2> = s
         .doc
@@ -1644,6 +1855,9 @@ fn free_spot(s: &Session, at: [f32; 2], width: f32) -> [f32; 2] {
         .nodes()
         .map(|(id, _)| (id, node_position(s, id, &defaults)))
         .collect();
+    if let Some((id, [x, y])) = pending {
+        positions.insert(id, Vec2::new(x, y));
+    }
     let fixed: BTreeSet<NodeId> = positions.keys().copied().collect();
     let new = NodeId(usize::MAX);
     positions.insert(new, Vec2::new(at[0], at[1]));
@@ -1827,9 +2041,11 @@ fn card_width(graph: &symphony_core::graph::Graph, id: NodeId) -> f32 {
 /// (danger) are kept for their meanings. Types beyond the table reuse a
 /// table colour shifted lighter or darker, so they read as related.
 pub fn kind_colour(kind: &NodeKind) -> egui::Color32 {
-    const TABLE: [(&str, (u8, u8, u8)); 11] = [
+    const TABLE: [(&str, (u8, u8, u8)); 13] = [
         ("Drawing", (111, 194, 168)),
         ("Peg", (186, 150, 222)),
+        ("Skeleton", (181, 139, 196)),
+        ("Bone", (215, 180, 215)),
         ("Mesh Warp", (214, 168, 232)),
         ("Composite", (128, 182, 214)),
         ("Camera", (214, 214, 220)),
@@ -2672,6 +2888,7 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
     }
     let mut disconnect = None;
     let mut convert = None;
+    let mut smart_joint = None;
     if let Some((input, node)) =
         ui.data(|data| data.get_temp::<(Option<Input>, Option<NodeId>)>(menu_id))
     {
@@ -2682,11 +2899,20 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
                 .node(id)
                 .is_some_and(|node| matches!(node.kind, NodeKind::Drawing { .. }))
         });
-        if input.is_some() || drawing.is_some() {
+        let joint = node
+            .or(input.map(|(id, _)| id))
+            .and_then(|id| smart_joint_label(s, id).map(|label| (id, label)));
+        if input.is_some() || drawing.is_some() || joint.is_some() {
             resp.context_menu(|ui| {
                 if let Some(input) = input {
                     if ui.button("Disconnect input").clicked() {
                         disconnect = Some(input);
+                        ui.close();
+                    }
+                }
+                if let Some((id, label)) = joint {
+                    if ui.button(label).clicked() {
+                        smart_joint = Some(id);
                         ui.close();
                     }
                 }
@@ -2703,6 +2929,9 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
     }
     if let Some(input) = disconnect {
         edit_link(s, None, input, None);
+    }
+    if let Some(id) = smart_joint {
+        toggle_smart_joint(s, id);
     }
     if let Some(id) = convert {
         convert_drawing(s, id);
@@ -2722,8 +2951,15 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
                 theme::TEXT_SECONDARY,
             );
         }
-        let transform =
-            node.is_some_and(|n| matches!(n.kind, NodeKind::Peg(_) | NodeKind::Drawing { .. }));
+        let transform = node.is_some_and(|n| {
+            matches!(
+                n.kind,
+                NodeKind::Peg(_)
+                    | NodeKind::Drawing { .. }
+                    | NodeKind::Skeleton(_)
+                    | NodeKind::Bone(_)
+            )
+        });
         let compatible = match state.drag {
             Some(Drag::Cable { source, .. }) => {
                 s.doc.graph.can_connect_to(source, input.0, input.1)
@@ -2751,11 +2987,12 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
         socket(&painter, point, transform, filled, highlighted, ink, zoom);
     }
     for (id, point) in outputs {
-        let transform = s
-            .doc
-            .graph
-            .node(id)
-            .is_some_and(|n| matches!(n.kind, NodeKind::Peg(_)));
+        let transform = s.doc.graph.node(id).is_some_and(|n| {
+            matches!(
+                n.kind,
+                NodeKind::Peg(_) | NodeKind::Skeleton(_) | NodeKind::Bone(_)
+            )
+        });
         let highlighted = hover.is_some_and(|p| p.distance(point) <= hit_radius)
             || state.selection.contains(&id)
             || selected_outputs.contains(&id);
@@ -2929,7 +3166,9 @@ pub fn library(ui: &mut egui::Ui, s: &Session, state: &mut NodeViewState) {
                     ui.label(format!("{name} ({id})"));
                 }
             }
-            for kind in effect_nodes() {
+            for kind in [NodeKind::Skeleton(Default::default()), NodeKind::Bone(Default::default())]
+                .into_iter().chain(effect_nodes())
+            {
                 let name = kind_label(&kind);
                 if name.to_lowercase().contains(&query) {
                     ui.label(name);
@@ -3067,6 +3306,44 @@ mod tests {
         let p = node_position(&s, peg, &default_positions(&s));
         add_node(&mut s, NodeKind::Composite, [p.x, p.y]);
         assert!(overlapping(&s).is_empty(), "{:?}", overlapping(&s));
+    }
+
+    #[test]
+    fn adding_either_rig_node_starts_a_pair_and_adding_bone_extends_it() {
+        for kind in [
+            NodeKind::Skeleton(Default::default()),
+            NodeKind::Bone(Default::default()),
+        ] {
+            let mut s = Session::new_scene();
+            let root = s.doc.graph.next_id();
+            add_node(&mut s, kind, [0.0, 40.0]);
+            let upper = s.selected_node.unwrap();
+            assert!(matches!(
+                s.doc.graph.node(root).unwrap().kind,
+                NodeKind::Skeleton(_)
+            ));
+            assert_eq!(s.doc.graph.input(upper, 0), Some(root));
+            assert!(overlapping(&s).is_empty());
+            add_node(&mut s, NodeKind::Bone(Default::default()), [0.0, 40.0]);
+            let lower = s.selected_node.unwrap();
+            assert_eq!(s.doc.graph.input(lower, 0), Some(upper));
+            assert_eq!(smart_joint_label(&s, lower), Some("Make smart joint"));
+            toggle_smart_joint(&mut s, lower);
+            assert_eq!(smart_joint_label(&s, lower), Some("Remove smart joint"));
+            s.frame = 4;
+            set_selected_key(&mut s, false);
+            assert!(s.doc.graph.bone(lower).unwrap().has_key(4));
+            set_selected_key(&mut s, true);
+            assert!(!s.doc.graph.bone(lower).unwrap().has_key(4));
+            s.undo();
+            s.undo();
+            s.undo();
+            assert_eq!(smart_joint_label(&s, lower), Some("Make smart joint"));
+            s.undo();
+            assert!(s.doc.graph.node(lower).is_none());
+            s.undo();
+            assert!(s.doc.graph.node(upper).is_none() && s.doc.graph.node(root).is_none());
+        }
     }
 
     #[test]
