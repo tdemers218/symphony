@@ -12,9 +12,12 @@ mod crash;
 mod import;
 mod keymap;
 mod layered;
+mod paint_links;
 mod perf;
 mod presets;
 mod save_dialog;
+#[cfg(target_os = "macos")]
+mod screen_colour;
 mod search;
 mod session;
 mod shot;
@@ -2325,6 +2328,34 @@ impl SymphonyApp {
         use symphony_core::stroke::ArtLayer;
         let canvas = [View::Camera, View::Drawing];
         let mut out: Vec<Entry> = Vec::new();
+        #[cfg(target_os = "macos")]
+        out.push(
+            Entry::new(
+                "Pick colour from screen",
+                Kind::Action,
+                Command::PickScreenColour,
+                "colour.pick-screen",
+            )
+            .words("eyedropper sample pixel desktop monitor color")
+            .ctx(&[
+                View::Colour,
+                View::Camera,
+                View::Drawing,
+                View::ToolProperties,
+            ]),
+        );
+        if self.s.can_reduce_points() {
+            out.push(
+                Entry::new(
+                    "Reduce stroke points",
+                    Kind::Action,
+                    Command::ReduceStrokePoints,
+                    "drawing.reduce-points",
+                )
+                .words("simplify vector line remove control points")
+                .ctx(&[View::Drawing, View::Camera, View::ToolProperties]),
+            );
+        }
         let node_views = vec![View::Node, View::NodeLibrary];
         out.push(
             Entry::new(
@@ -2828,6 +2859,9 @@ impl SymphonyApp {
                     }
                 }
             }
+            Command::ReduceStrokePoints => self.s.reduce_points(),
+            #[cfg(target_os = "macos")]
+            Command::PickScreenColour => screen_colour::pick(ctx, self.s.key.clone()),
             Command::GoToFrame(f) => self.s.frame = f.clamp(1, self.s.length()),
             Command::SetZoom(z) => {
                 self.camera.set_zoom(z);
@@ -3790,6 +3824,10 @@ impl eframe::App for SymphonyApp {
             }
         }
         let start = std::time::Instant::now();
+        #[cfg(target_os = "macos")]
+        if let Some(rgb) = screen_colour::take(ui.ctx(), &self.s.key) {
+            self.s.use_screen_colour(rgb);
+        }
         self.frame_ui(ui, frame);
         perf_log(start.elapsed());
         eframe::egui_wgpu::perf_ui_end();

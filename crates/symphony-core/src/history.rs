@@ -74,6 +74,12 @@ pub enum Edit {
         before: Id,
         after: Id,
     },
+    /// Replace editable text metadata. Glyph strokes are separate edits.
+    SetText {
+        drawing: Id,
+        before: Option<crate::stroke::TextObject>,
+        after: Option<crate::stroke::TextObject>,
+    },
     /// Replace strokes in place, matched by ID (move, scale, rotate, flip).
     SetStrokes {
         drawing: Id,
@@ -248,6 +254,25 @@ impl Edit {
                 s.graph
                     .replace_links(if forward { after } else { before }.clone());
                 s.custom_wiring = forward || *was_custom;
+            }
+            Edit::SetText {
+                drawing,
+                before,
+                after,
+            } => {
+                if let Some(drawing) = s.drawings.get_mut(drawing) {
+                    let (previous, next) = if forward {
+                        (before, after)
+                    } else {
+                        (after, before)
+                    };
+                    if let Some(previous) = previous {
+                        drawing.text.retain(|object| object.id != previous.id);
+                    }
+                    if let Some(next) = next {
+                        drawing.text.push(next.clone());
+                    }
+                }
             }
             Edit::AddStroke { drawing, stroke } => {
                 if let Some(d) = s.drawings.get_mut(drawing) {
@@ -584,6 +609,9 @@ fn stroke_bytes(s: &Stroke) -> usize {
 
 fn fill_bytes(f: &Fill) -> usize {
     64 + f.contours.iter().map(|c| c.len() * 8 + 24).sum::<usize>()
+        + f.linked
+            .as_ref()
+            .map_or(0, |link| 48 + link.strokes.len() * 8)
 }
 
 impl Edit {
@@ -592,6 +620,11 @@ impl Edit {
         let strokes = |v: &[Stroke]| v.iter().map(stroke_bytes).sum::<usize>();
         let fills = |v: &[Fill]| v.iter().map(fill_bytes).sum::<usize>();
         64 + match self {
+            Edit::SetText { before, after, .. } => before
+                .iter()
+                .chain(after)
+                .map(|text| 104 + text.text.len() + text.style.family.len() + text.glyphs.len() * 8)
+                .sum(),
             Edit::SetStrokes { before, after, .. } => strokes(before) + strokes(after),
             Edit::AddStroke { stroke, .. } | Edit::RemoveStroke { stroke, .. } => {
                 stroke_bytes(stroke)

@@ -26,6 +26,7 @@ pub struct TimingState {
     swap_drag: Option<(usize, usize, f32)>,
     /// A layer being dragged to a new place in the stack (its row).
     layer_drag: Option<usize>,
+    scrubbing: bool,
     /// Layer order last frame (columns), and layers that just arrived or
     /// moved with when, so their row glows briefly.
     last_order: Vec<symphony_core::id::Id>,
@@ -1086,13 +1087,31 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                     theme::ACCENT_TIME.gamma_multiply(0.16),
                 );
             }
+            // Determine the gesture from the press, even when its current
+            // pointer has crossed into the headers or past the last frame.
+            if resp.drag_started_by(egui::PointerButton::Primary) {
+                t.scrubbing = ui
+                    .input(|i| i.pointer.press_origin())
+                    .is_some_and(|p| p.x >= o.x + HEAD && p.y >= o.y);
+            }
+            let scrub = t.scrubbing && (resp.dragged() || resp.drag_stopped());
+            if let Some(p) = resp.interact_pointer_pos().filter(|p| {
+                scrub || (resp.clicked_by(egui::PointerButton::Primary) && p.x >= o.x + HEAD)
+            }) {
+                let frame =
+                    (((p.x - o.x - HEAD) / cw).floor() as i64 + 1).clamp(1, i64::from(len)) as u32;
+                s.frame = frame;
+            }
+            if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+                t.scrubbing = false;
+            }
             // A click jumps straight to the frame (only that frame is ever
             // shown or rendered); just the line glides there (Select
             // motion). Dragging and playing keep it exactly on the frame:
             // scrubbing must feel snappy, not trail the mouse.
             let target = s.frame.min(len) as f32;
             let playhead = egui::Id::unique("timeline-playhead");
-            let shown = if s.playing || resp.dragged() || resp.drag_stopped() {
+            let shown = if s.playing || scrub || s.frame == 1 {
                 symphony_ui::motion::start(ui.ctx(), playhead, target);
                 target
             } else {
@@ -1127,11 +1146,9 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
             };
             // Drag a layer by its name to move it in the stack; a line
             // shows where it will land.
-            if resp.drag_started() {
-                if let (Some(p), Some(row)) = (
-                    resp.interact_pointer_pos(),
-                    resp.interact_pointer_pos().and_then(row_at),
-                ) {
+            if resp.drag_started_by(egui::PointerButton::Primary) && !t.scrubbing {
+                let origin = ui.input(|i| i.pointer.press_origin());
+                if let (Some(p), Some(row)) = (origin, origin.and_then(row_at)) {
                     let x = p.x - o.x;
                     if (32.0..HEAD - PARAM_W).contains(&x) {
                         t.layer_drag = Some(row);
@@ -1169,9 +1186,6 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                 .filter(|_| t.layer_drag.is_none())
             {
                 let rel = p - o;
-                if rel.x >= HEAD {
-                    s.frame = (((rel.x - HEAD) / cw) as u32 + 1).clamp(1, len);
-                }
                 if let Some(row) = row_at(p) {
                     if resp.clicked() || resp.drag_started() {
                         if rel.x < 32.0 && resp.clicked() {
@@ -1441,6 +1455,43 @@ pub fn xsheet(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile: 
 #[cfg(test)]
 mod hierarchy_tests {
     use super::*;
+
+    #[test]
+    fn timeline_scrub_can_cross_into_headers_and_reach_frame_one() {
+        let mut session = Session::new_scene();
+        session.frame = 6;
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(Vec2::new(800.0, 380.0))
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, (session, timing)| timeline(ui, session, timing, Profile::Symphony),
+                (session, TimingState::default()),
+            );
+        harness.run_steps(3);
+        let press = Pos2::new(320.0, 96.0);
+        let moved = Pos2::new(144.0, 96.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        harness
+            .input_mut()
+            .events
+            .extend([egui::Event::PointerMoved(press), button(press, true)]);
+        harness.run_steps(1);
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(moved));
+        harness.run_steps(1);
+        assert_eq!(harness.state().0.frame, 1);
+        harness.input_mut().events.push(button(moved, false));
+        harness.run_steps(1);
+        assert_eq!(harness.state().0.frame, 1);
+        assert!(!harness.state().1.scrubbing);
+    }
 
     #[test]
     fn ruler_beats_follow_the_frame_rate() {

@@ -770,6 +770,7 @@ fn erase_cost() {
             -400.0 + (i / 20) as f32 * 80.0,
         );
         let fill = Fill {
+            linked: None,
             id: s.doc.ids.fresh(),
             swatch,
             art: Default::default(),
@@ -842,6 +843,7 @@ fn busy_frame_cost() {
                 -500.0 + (i / 10) as f32 * 100.0,
             );
             let fill = Fill {
+                linked: None,
                 id: s.doc.ids.fresh(),
                 swatch,
                 art: Default::default(),
@@ -1836,6 +1838,7 @@ fn colour_zones_can_be_selected_moved_and_deleted() {
         s.doc.xsheet.column_mut(col).unwrap().set(1, Some(did));
         let swatch = s.doc.palette.swatches[1].id;
         let fill = Fill {
+            linked: None,
             id: s.doc.ids.fresh(),
             swatch,
             art: ArtLayer::ColourArt,

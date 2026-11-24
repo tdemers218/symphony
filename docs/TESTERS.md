@@ -157,6 +157,24 @@ again, so edits appear in each of its exposures. To shift timing across
 all layers, search for **Insert In-between Frame** or type a quantity
 such as **insert 3 frames**.
 
+## Text, point editing, and paint
+
+With **Text**, click existing text on the active drawing to edit its
+wording or typography. Use the font filter in **Tool Properties**.
+Bundled fonts include Bebas Neue, Fraunces, Josefin Sans, Patrick Hand,
+Space Grotesk, and Space Mono. Older text drawn as outlines stays editable
+as vector shapes.
+
+Select one or more strokes, then choose **Reduce stroke points** in
+Tool Properties or Tab Search. Increase the tolerance for fewer points.
+In Line Editor, the command also works on strokes with selected points.
+
+**Keep new fills linked to lines** in Paint Tool Properties makes new
+bucket fills follow those lines when moved or reshaped. A region that
+opens during an edit keeps its last closed fill. On macOS, **Pick colour
+from screen** opens the system sampler and selects a matching palette
+colour or adds a new swatch.
+
 ## Select and colour drawings
 
 With **Select**, click an existing stroke to select it. On empty space,

@@ -371,6 +371,7 @@ pub struct Session {
     /// (stroke, point index).
     pub line_edit_radius: f32,
     pub line_edit_strength: f32,
+    pub point_reduction: f32,
     pub line_points: Vec<(Id, usize)>,
     /// Lines pushed during the current drag, slimmed again on release.
     line_touched: Vec<Id>,
@@ -396,6 +397,7 @@ pub struct Session {
     pub animate: bool,
     pub selection: Selection,
     pub paint_mode: PaintMode,
+    pub link_bucket_fills: bool,
     /// Harmony's Show Strokes (K): reveal invisible strokes.
     pub show_strokes: bool,
     /// Harmony's Respect Protected Colours (Shift+S), on by default.
@@ -494,6 +496,7 @@ impl Session {
             erase_all_frames: false,
             line_edit_radius: 40.0,
             line_edit_strength: 1.0,
+            point_reduction: 1.0,
             line_points: Vec::new(),
             line_touched: Vec::new(),
             swatch,
@@ -512,6 +515,7 @@ impl Session {
             last_pen: Tool::Brush,
             selection: Selection::default(),
             paint_mode: PaintMode::Paint,
+            link_bucket_fills: true,
             show_strokes: false,
             respect_protected: true,
             art: ArtLayer::LineArt,
@@ -749,8 +753,37 @@ impl Session {
     /// layer), with its top-left (or aligned) point at `at` in drawing
     /// space. One undo step. Returns how many shapes it made.
     pub fn add_text(&mut self, layer: usize, frame: u32, at: [f32; 2], text: &str) -> usize {
+        self.write_text(layer, frame, Affine::translate(at[0], at[1]), text, None)
+    }
+
+    pub fn write_text(
+        &mut self,
+        layer: usize,
+        frame: u32,
+        transform: Affine,
+        text: &str,
+        previous: Option<Id>,
+    ) -> usize {
         let shapes = crate::vector_import::text_shapes(text, &self.text_style);
-        if shapes.is_empty() {
+        let existing = self
+            .doc
+            .exposed(layer, frame)
+            .and_then(|id| self.doc.drawings.get(&id));
+        let before = previous
+            .and_then(|id| existing?.text.iter().find(|object| object.id == id))
+            .cloned();
+        if (previous.is_some() && before.is_none())
+            || (shapes.is_empty() && !text.trim().is_empty())
+        {
+            return 0;
+        }
+        if before
+            .as_ref()
+            .is_some_and(|object| object.text == text && object.style == self.text_style)
+        {
+            return 0;
+        }
+        if shapes.is_empty() && before.is_none() {
             return 0;
         }
         let Some(col) = self.doc.layers.get(layer).map(|l| l.column) else {
@@ -772,34 +805,99 @@ impl Session {
                 id
             }
         };
-        let n = shapes.len();
+        let (art, swatch) = before
+            .as_ref()
+            .and_then(|object| {
+                let drawing = self.doc.drawings.get(&drawing)?;
+                let glyph = drawing
+                    .strokes
+                    .iter()
+                    .find(|stroke| object.glyphs.contains(&stroke.id))?;
+                Some((glyph.art, glyph.swatch))
+            })
+            .unwrap_or((self.art, self.swatch));
+        let mut glyphs = Vec::new();
+        let mut replacement = Vec::new();
         for shape in shapes {
             let shape = shape
                 .into_iter()
                 .map(|ring| {
                     ring.into_iter()
-                        .map(|p| [p[0] + at[0], p[1] + at[1]])
+                        .map(|p| {
+                            let (x, y) = transform.apply(p[0], p[1]);
+                            [x, y]
+                        })
                         .collect()
                 })
                 .collect();
-            edits.push(Edit::AddStroke {
-                drawing,
-                stroke: Stroke {
-                    id: self.doc.ids.fresh(),
-                    kind: StrokeKind::Brush,
-                    art: self.art,
-                    swatch: self.swatch,
-                    min_width: 1.0,
-                    max_width: 1.0,
-                    points: Vec::new(),
-                    tips: Default::default(),
-                    texture: None,
-                    shape,
-                },
+            let id = self.doc.ids.fresh();
+            glyphs.push(id);
+            replacement.push(Stroke {
+                id,
+                kind: StrokeKind::Brush,
+                art,
+                swatch,
+                min_width: 1.0,
+                max_width: 1.0,
+                points: Vec::new(),
+                tips: Default::default(),
+                texture: None,
+                shape,
             });
         }
-        self.history.apply(&mut self.doc, "Text", edits);
-        n
+        if let Some(object) = &before {
+            if let Some(drawing_doc) = self.doc.drawings.get(&drawing) {
+                let existing = drawing_doc
+                    .strokes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, stroke)| object.glyphs.contains(&stroke.id));
+                let mut existing = existing.rev().peekable();
+                while let Some((index, stroke)) = existing.next() {
+                    if existing.peek().is_none() {
+                        edits.push(Edit::ReplaceStroke {
+                            drawing,
+                            index,
+                            before: stroke.clone(),
+                            after: std::mem::take(&mut replacement),
+                        });
+                    } else {
+                        edits.push(Edit::RemoveStroke {
+                            drawing,
+                            index,
+                            stroke: stroke.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        edits.extend(
+            replacement
+                .into_iter()
+                .map(|stroke| Edit::AddStroke { drawing, stroke }),
+        );
+        let count = glyphs.len();
+        let after = (!glyphs.is_empty()).then(|| symphony_core::stroke::TextObject {
+            id: before
+                .as_ref()
+                .map_or_else(|| self.doc.ids.fresh(), |object| object.id),
+            text: text.to_owned(),
+            style: self.text_style.clone(),
+            transform,
+            glyphs,
+        });
+        let name = if before.is_some() {
+            "Edit text"
+        } else {
+            "Add text"
+        };
+        edits.push(Edit::SetText {
+            drawing,
+            before,
+            after,
+        });
+        self.history.apply(&mut self.doc, name, edits);
+        count
     }
 
     /// Erase strokes by ID from `drawing`. Repeated calls during one eraser
@@ -905,6 +1003,7 @@ impl Session {
                     .into_iter()
                     .map(|contours| symphony_core::stroke::Fill {
                         contours,
+                        linked: None,
                         ..f.clone()
                     })
                     .collect();
@@ -1012,12 +1111,37 @@ impl Session {
                 let mut drawing = self.doc.make_drawing(column_id);
                 drawing.strokes = source.strokes;
                 drawing.fills = source.fills;
+                drawing.image = source.image;
+                drawing.text = source.text;
+                let mut ids = std::collections::BTreeMap::new();
                 for stroke in &mut drawing.strokes {
-                    stroke.id = self.doc.ids.fresh();
+                    let fresh = self.doc.ids.fresh();
+                    ids.insert(stroke.id, fresh);
+                    stroke.id = fresh;
                 }
                 for fill in &mut drawing.fills {
                     fill.id = self.doc.ids.fresh();
+                    if let Some(link) = &mut fill.linked {
+                        let mapped: Option<Vec<_>> =
+                            link.strokes.iter().map(|id| ids.get(id).copied()).collect();
+                        if let Some(mapped) = mapped {
+                            link.strokes = mapped;
+                        } else {
+                            fill.linked = None;
+                        }
+                    }
                 }
+                drawing.text.retain_mut(|object| {
+                    let mapped: Option<Vec<_>> = object
+                        .glyphs
+                        .iter()
+                        .map(|id| ids.get(id).copied())
+                        .collect();
+                    let Some(mapped) = mapped else { return false };
+                    object.glyphs = mapped;
+                    object.id = self.doc.ids.fresh();
+                    true
+                });
                 let id = drawing.id;
                 edits.push(Edit::AddDrawing { drawing });
                 (id, "Duplicate drawing")
@@ -1133,9 +1257,17 @@ impl Session {
                 // Zones are closed by the current art layer's own lines, as
                 // in Harmony (Colour Art uses strokes made from Line Art).
                 let strokes: Vec<&Stroke> = d.strokes.iter().filter(|st| st.art == art).collect();
-                match find_zone(&strokes, x, y, cell) {
+                let resolution = (cell * 0.5).clamp(0.5, 2.0);
+                match find_zone(&strokes, x, y, resolution) {
                     Ok(contours) => {
+                        let linked = self
+                            .link_bucket_fills
+                            .then(|| {
+                                crate::paint_links::link(&strokes, &contours, [x, y], resolution)
+                            })
+                            .flatten();
                         let fill = symphony_core::stroke::Fill {
+                            linked,
                             id: self.doc.ids.fresh(),
                             swatch,
                             art,
@@ -1417,18 +1549,29 @@ impl Session {
         if before.is_empty() && fills.is_empty() {
             return;
         }
-        let after = before
+        let after: Vec<_> = before
             .iter()
             .map(|st| symphony_vector::transformed(st, m))
             .collect();
-        let mut edits = vec![Edit::SetStrokes {
-            drawing,
-            before,
-            after,
-        }];
+        let mut edits = self
+            .doc
+            .drawings
+            .get(&drawing)
+            .map_or_else(Vec::new, |doc| {
+                crate::paint_links::refit(doc, &after, &self.selection.strokes, Some(m))
+            });
+        edits.insert(
+            0,
+            Edit::SetStrokes {
+                drawing,
+                before,
+                after,
+            },
+        );
         // Zones move with the lines (same id, same depth).
         for (index, f) in fills {
             let mut moved = f.clone();
+            moved.linked = None;
             for p in moved.contours.iter_mut().flatten() {
                 let (x, y) = m.apply(p[0], p[1]);
                 *p = [x, y];
@@ -1439,6 +1582,23 @@ impl Session {
                 before: f,
                 after: vec![moved],
             });
+        }
+        if let Some(d) = self.doc.drawings.get(&drawing) {
+            for object in &d.text {
+                if object
+                    .glyphs
+                    .iter()
+                    .all(|id| self.selection.strokes.contains(id))
+                {
+                    let mut after = object.clone();
+                    after.transform = m.compose(after.transform);
+                    edits.push(Edit::SetText {
+                        drawing,
+                        before: Some(object.clone()),
+                        after: Some(after),
+                    });
+                }
+            }
         }
         self.history.apply(&mut self.doc, name, edits);
     }
@@ -1520,6 +1680,7 @@ impl Session {
                     fill.art == art && fill.contains(x, y)
                 }) {
                     new_fills.push(symphony_core::stroke::Fill {
+                        linked: None,
                         id: Id(0),
                         swatch: self.swatch,
                         art,
@@ -1638,6 +1799,7 @@ impl Session {
                 f.swatch = self.swatch;
             }
             f.id = self.doc.ids.fresh();
+            f.linked = None;
             ids.push(f.id);
             edits.push(Edit::AddFill { drawing, fill: f });
         }
@@ -2380,6 +2542,7 @@ impl Session {
                         .collect();
                     match piece.part {
                         Part::Zone => d.fills.push(Fill {
+                            linked: None,
                             id: self.doc.ids.fresh(),
                             swatch,
                             art: ArtLayer::ColourArt,
@@ -2495,11 +2658,25 @@ impl Session {
 
     /// Add a layer above the selected one, like Harmony's Add Drawing Layer.
     pub fn add_layer(&mut self) {
+        self.add_layer_at(None);
+    }
+
+    pub fn add_layer_at(&mut self, position: Option<[f32; 2]>) {
         let n = (1..)
             .find(|n| (0..self.layer_count()).all(|i| self.layer_name(i) != format!("Drawing {n}")))
             .unwrap_or(1);
         let index = self.selected.min(self.layer_count());
-        self.add_layer_named(&format!("Drawing {n}"), index);
+        let layer = self.doc.make_layer(&format!("Drawing {n}"), index);
+        let node = layer.layer.node;
+        let mut edits = vec![Edit::AddLayer(Box::new(layer))];
+        if let Some(after) = position {
+            edits.push(Edit::MoveNode {
+                id: node,
+                before: None,
+                after,
+            });
+        }
+        self.history.apply(&mut self.doc, "Add layer", edits);
         self.selected = index;
     }
 
@@ -2628,6 +2805,32 @@ impl Session {
             protected: false,
         });
         self.apply_palette("Add colour", palette, Vec::new());
+        self.swatch = id;
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn use_screen_colour(&mut self, rgb: [u8; 3]) {
+        if let Some(swatch) = self
+            .doc
+            .palette
+            .swatches
+            .iter()
+            .find(|swatch| swatch.rgb == rgb && swatch.opacity == 255)
+        {
+            self.swatch = swatch.id;
+            return;
+        }
+        let id = self.doc.ids.fresh();
+        let mut palette = self.doc.palette.clone();
+        let [r, g, b] = rgb;
+        palette.swatches.push(symphony_core::palette::Swatch {
+            id,
+            name: format!("#{r:02X}{g:02X}{b:02X}"),
+            rgb,
+            opacity: 255,
+            protected: false,
+        });
+        self.apply_palette("Pick screen colour", palette, Vec::new());
         self.swatch = id;
     }
 
@@ -2903,10 +3106,82 @@ impl Session {
                     p.y += delta[1];
                 }
             }
+            if !self.line_touched.contains(&st.id) {
+                self.line_touched.push(st.id);
+            }
             before.push(st);
             after.push(moved);
         }
         self.commit_line_edit(drawing, before, after);
+    }
+
+    fn reduction_target(&self) -> Option<(Id, Vec<Id>)> {
+        if self.tool == Tool::LineEditor && !self.line_points.is_empty() {
+            let drawing = self.doc.exposed(self.selected, self.frame)?;
+            return Some((
+                drawing,
+                self.line_points.iter().map(|(id, _)| *id).collect(),
+            ));
+        }
+        Some((self.selection.drawing?, self.selection.strokes.clone()))
+    }
+
+    pub fn can_reduce_points(&self) -> bool {
+        self.reduction_target().is_some_and(|(drawing, ids)| {
+            self.doc.drawings.get(&drawing).is_some_and(|doc| {
+                doc.strokes.iter().any(|stroke| {
+                    ids.contains(&stroke.id) && stroke.shape.is_empty() && stroke.points.len() > 2
+                })
+            })
+        })
+    }
+
+    pub fn reduce_points(&mut self) {
+        let Some((drawing, ids)) = self.reduction_target() else {
+            return;
+        };
+        let Some(doc) = self.doc.drawings.get(&drawing) else {
+            return;
+        };
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        let mut removed = 0;
+        for stroke in doc
+            .strokes
+            .iter()
+            .filter(|stroke| ids.contains(&stroke.id) && stroke.shape.is_empty())
+        {
+            let points = symphony_vector::curve::simplify(
+                &stroke.points,
+                self.point_reduction,
+                stroke.max_width - stroke.min_width,
+            );
+            if points.len() < stroke.points.len() {
+                removed += stroke.points.len() - points.len();
+                before.push(stroke.clone());
+                after.push(Stroke {
+                    points,
+                    ..stroke.clone()
+                });
+            }
+        }
+        if removed == 0 {
+            self.note("No points could be removed at that tolerance");
+            return;
+        }
+        let mut edits = crate::paint_links::refit(doc, &after, &[], None);
+        edits.insert(
+            0,
+            Edit::SetStrokes {
+                drawing,
+                before,
+                after,
+            },
+        );
+        self.history
+            .apply(&mut self.doc, "Reduce stroke points", edits);
+        self.line_points.clear();
+        self.note(format!("Removed {removed} stroke points"));
     }
 
     /// After a push: slim the lines it touched back down to the stroke
@@ -2931,6 +3206,18 @@ impl Session {
         }
         // Part of the same gesture, so the whole drag is one undo step.
         self.commit_line_edit(drawing, before, after);
+        if let Some(doc) = self.doc.drawings.get(&drawing) {
+            let changed: Vec<_> = doc
+                .strokes
+                .iter()
+                .filter(|stroke| touched.contains(&stroke.id))
+                .cloned()
+                .collect();
+            for edit in crate::paint_links::refit(doc, &changed, &[], None) {
+                self.history
+                    .apply_merged(&mut self.doc, "Edit lines", "line-edit", edit);
+            }
+        }
         self.end_gesture();
     }
 
@@ -3009,6 +3296,70 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_can_be_rewritten_after_move_and_restored_by_undo() {
+        let mut s = Session::new_scene();
+        s.text_style.family = "Space Grotesk".into();
+        assert!(s.add_text(0, 1, [10.0, 20.0], "Original") > 0);
+        let drawing = s.doc.exposed(0, 1).unwrap();
+        let original = s.doc.drawings[&drawing].text[0].clone();
+        s.selection = Selection {
+            drawing: Some(drawing),
+            strokes: original.glyphs.clone(),
+        };
+        s.transform_selection(Affine::translate(60.0, 2.0), "Move text");
+        let moved = s.doc.drawings[&drawing].text[0].clone();
+        assert_eq!(moved.transform.tx, 70.0);
+        assert!(s.write_text(0, 1, moved.transform, "Revised", Some(moved.id)) > 0);
+        let edited = &s.doc.drawings[&drawing].text[0];
+        assert_eq!(edited.text, "Revised");
+        assert_eq!(edited.id, original.id);
+        assert_eq!(edited.transform, moved.transform);
+        s.undo();
+        assert_eq!(s.doc.drawings[&drawing].text, [moved]);
+    }
+
+    #[test]
+    fn paint_follows_moved_lines_and_undo_restores_the_fill() {
+        let mut s = Session::new_scene();
+        square_drawing(&mut s);
+        s.paint_at(0, 1, 50.0, 50.0, 1.0);
+        let drawing = s.doc.exposed(0, 1).unwrap();
+        let before = s.doc.drawings[&drawing].fills[0].clone();
+        assert!(before.linked.is_some());
+        let strokes = s.doc.drawings[&drawing]
+            .strokes
+            .iter()
+            .map(|stroke| stroke.id)
+            .collect();
+        s.selection = Selection {
+            drawing: Some(drawing),
+            strokes,
+        };
+        s.transform_selection(Affine::translate(100.0, 0.0), "Move lines");
+        let moved = &s.doc.drawings[&drawing].fills[0];
+        assert!(moved.contains(150.0, 50.0) && !moved.contains(50.0, 50.0));
+        s.undo();
+        assert_eq!(s.doc.drawings[&drawing].fills[0], before);
+    }
+
+    #[test]
+    fn linked_fill_is_refitted_to_reshaped_points() {
+        let mut s = Session::new_scene();
+        square_drawing(&mut s);
+        s.paint_at(0, 1, 50.0, 50.0, 1.0);
+        let drawing = s.doc.exposed(0, 1).unwrap();
+        let before = s.doc.drawings[&drawing].fills[0].clone();
+        s.line_select(drawing, [90.0, 10.0], 3.0);
+        s.line_select(drawing, [90.0, 90.0], 3.0);
+        s.line_move_selected(drawing, [30.0, 0.0]);
+        s.line_edit_finish(drawing, 0.0);
+        assert!(s.doc.drawings[&drawing].fills[0].contains(105.0, 50.0));
+        s.undo();
+        assert_eq!(s.doc.drawings[&drawing].fills[0], before);
+        assert_eq!(s.doc.drawings[&drawing].strokes[0].points[1].x, 90.0);
+    }
 
     #[test]
     fn moving_a_layer_restacks_it_and_undoes_in_one_step() {

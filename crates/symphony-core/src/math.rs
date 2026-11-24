@@ -3,7 +3,7 @@
 /// | a c tx |
 /// | b d ty |
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Affine {
     pub a: f32,
     pub b: f32,

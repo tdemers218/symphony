@@ -146,6 +146,7 @@ mod tests {
             name: "d".into(),
             strokes: vec![line],
             fills: vec![Fill {
+                linked: None,
                 id: Id(4),
                 swatch: Id(0),
                 art: Default::default(),
@@ -157,6 +158,7 @@ mod tests {
                 ]],
             }],
             image: None,
+            text: Vec::new(),
         };
         let bent = drawing(&d, &warp);
         let pts = &bent.strokes[0].points;

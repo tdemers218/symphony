@@ -324,7 +324,8 @@ fn to_pos((x, y): (f32, f32)) -> Pos2 {
 struct TextDraft {
     layer: usize,
     frame: u32,
-    at: [f32; 2],
+    transform: Affine,
+    editing: Option<symphony_core::stroke::TextObject>,
     text: String,
     focus: bool,
     preview: Option<(
@@ -336,9 +337,13 @@ struct TextDraft {
 
 /// Put the typed text in the drawing (nothing if it's empty).
 fn commit_text(s: &mut Session, draft: TextDraft) {
-    if !draft.text.trim().is_empty() {
-        s.add_text(draft.layer, draft.frame, draft.at, &draft.text);
-    }
+    s.write_text(
+        draft.layer,
+        draft.frame,
+        draft.transform,
+        &draft.text,
+        draft.editing.map(|object| object.id),
+    );
 }
 
 /// The Text tool: a click starts text there; the letters show as they'll
@@ -375,11 +380,49 @@ fn text_tool(
         } else if let (Some(p), Some(back)) = (response.interact_pointer_pos(), to_screen.inverse())
         {
             let (x, y) = back.apply(p.x, p.y);
+            let hit = s
+                .doc
+                .exposed(s.selected, s.frame)
+                .and_then(|id| s.doc.drawings.get(&id))
+                .and_then(|drawing| {
+                    drawing
+                        .text
+                        .iter()
+                        .rev()
+                        .find(|object| {
+                            let glyphs: Vec<_> = drawing
+                                .strokes
+                                .iter()
+                                .filter(|stroke| {
+                                    stroke.art == s.art && object.glyphs.contains(&stroke.id)
+                                })
+                                .collect();
+                            if glyphs.len() != object.glyphs.len() {
+                                return false;
+                            }
+                            symphony_vector::bounds_of(glyphs).is_some_and(|(lo, hi)| {
+                                let margin = 5.0 / scale_of(to_screen).max(0.01);
+                                x >= lo[0] - margin
+                                    && x <= hi[0] + margin
+                                    && y >= lo[1] - margin
+                                    && y <= hi[1] + margin
+                            })
+                        })
+                        .cloned()
+                });
+            if let Some(object) = &hit {
+                s.text_style = object.style.clone();
+            }
             state.text = Some(TextDraft {
                 layer: s.selected,
                 frame: s.frame,
-                at: [x, y],
-                text: String::new(),
+                transform: hit
+                    .as_ref()
+                    .map_or(Affine::translate(x, y), |object| object.transform),
+                text: hit
+                    .as_ref()
+                    .map_or_else(String::new, |object| object.text.clone()),
+                editing: hit,
                 focus: true,
                 preview: None,
             });
@@ -411,9 +454,24 @@ fn text_tool(
             std::sync::Arc::new(mesh),
         ));
     }
-    let m = to_screen.compose(Affine::translate(draft.at[0], draft.at[1]));
+    let m = to_screen.compose(draft.transform);
     let ink = {
-        let [r, g, b, a] = s.doc.swatch_rgba(s.swatch);
+        let swatch = draft
+            .editing
+            .as_ref()
+            .and_then(|object| {
+                let drawing = s.doc.exposed(draft.layer, draft.frame)?;
+                let glyph = s
+                    .doc
+                    .drawings
+                    .get(&drawing)?
+                    .strokes
+                    .iter()
+                    .find(|stroke| object.glyphs.contains(&stroke.id))?;
+                Some(glyph.swatch)
+            })
+            .unwrap_or(s.swatch);
+        let [r, g, b, a] = s.doc.swatch_rgba(swatch);
         Color32::from_rgba_unmultiplied(r, g, b, a)
     };
     if let Some((_, _, mesh)) = &draft.preview {
@@ -1187,6 +1245,13 @@ pub fn ui(
                     .strokes
                     .iter()
                     .filter(|st| st.art == art && st.kind != StrokeKind::Invisible)
+                    .filter(|st| {
+                        !state
+                            .text
+                            .as_ref()
+                            .and_then(|draft| draft.editing.as_ref())
+                            .is_some_and(|object| object.glyphs.contains(&st.id))
+                    })
                 {
                     let transform = match preview {
                         Some(l)
@@ -1567,6 +1632,7 @@ pub fn ui(
                         }
                         // A click without dragging clears the point selection.
                         LineMode::MoveSelected if !le.moved => s.line_points.clear(),
+                        LineMode::MoveSelected => s.line_edit_finish(le.drawing, 0.0),
                         _ => s.end_gesture(),
                     }
                 }

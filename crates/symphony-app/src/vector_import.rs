@@ -261,37 +261,7 @@ fn clean(rings: Vec<Vec<[f32; 2]>>, even_odd: bool) -> Vec<Shape> {
 // ---------------------------------------------------------------------
 // Text (the Text tool)
 
-/// How text looks (the Text tool's properties).
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct TextStyle {
-    /// A font family installed on this computer ("" = the system's sans).
-    pub family: String,
-    /// Height in drawing units.
-    pub size: f32,
-    pub bold: bool,
-    pub italic: bool,
-    pub align: TextAlign,
-}
-
-impl Default for TextStyle {
-    fn default() -> Self {
-        TextStyle {
-            family: String::new(),
-            size: 72.0,
-            bold: false,
-            italic: false,
-            align: TextAlign::Left,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum TextAlign {
-    #[default]
-    Left,
-    Center,
-    Right,
-}
+pub use symphony_core::stroke::{TextAlign, TextStyle};
 
 fn fonts() -> std::sync::Arc<resvg::usvg::fontdb::Database> {
     static FONTS: std::sync::OnceLock<std::sync::Arc<resvg::usvg::fontdb::Database>> =
@@ -300,6 +270,16 @@ fn fonts() -> std::sync::Arc<resvg::usvg::fontdb::Database> {
         .get_or_init(|| {
             let mut db = resvg::usvg::fontdb::Database::new();
             db.load_system_fonts();
+            for bytes in [
+                include_bytes!("../assets/fonts/fraunces.ttf").as_slice(),
+                include_bytes!("../assets/fonts/spacegrotesk.ttf").as_slice(),
+                include_bytes!("../assets/fonts/josefinsans.ttf").as_slice(),
+                include_bytes!("../assets/fonts/bebasneue.ttf").as_slice(),
+                include_bytes!("../assets/fonts/patrickhand.ttf").as_slice(),
+                include_bytes!("../assets/fonts/spacemono.ttf").as_slice(),
+            ] {
+                db.load_font_data(bytes.to_vec());
+            }
             std::sync::Arc::new(db)
         })
         .clone()

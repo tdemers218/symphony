@@ -97,7 +97,7 @@ fn placeholder(here: Option<View>) -> &'static str {
 
 const WIDTH: f32 = 560.0;
 const ROWS: usize = 16;
-const SUGGESTED_ROWS: usize = 8;
+const SUGGESTED_ROWS: usize = 16;
 const ROW_H: f32 = 34.0;
 const FIELD_H: f32 = 30.0;
 
@@ -360,7 +360,9 @@ pub fn ui(
                     }
                     let mut scroll = egui::ScrollArea::vertical()
                         .id_salt("search-results")
+                        // Grow a previously short popup when its query changes.
                         .max_height(list_h)
+                        .min_scrolled_height(list_h)
                         .auto_shrink([false, false]);
                     if edit.changed() {
                         scroll = scroll.vertical_scroll_offset(0.0);
@@ -726,6 +728,7 @@ mod tests {
 
     #[test]
     fn search_scrolls_and_reaches_results_beyond_the_first_page() {
+        use egui_kittest::kittest::Queryable;
         let mut state = PaletteState::new(Pos2::new(390.0, 54.0), Some(View::Timeline));
         state.query = "Drawing".into();
         let entries: Vec<_> = (1..=32)
@@ -751,6 +754,12 @@ mod tests {
                 (state, entries),
             );
         harness.run_steps(3);
+        harness.get_by_label("Drawing entry 10");
+        harness.state_mut().0.query = "qzxv impossible match".into();
+        harness.run_steps(3);
+        harness.state_mut().0.query = "Drawing".into();
+        harness.run_steps(3);
+        harness.get_by_label("Drawing entry 10");
         for _ in 0..20 {
             harness.input_mut().events.push(egui::Event::Key {
                 key: egui::Key::ArrowDown,

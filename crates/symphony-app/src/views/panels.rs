@@ -67,9 +67,8 @@ fn text_controls(ui: &mut egui::Ui, s: &mut Session) {
     section(ui, "Text");
     hint(
         ui,
-        "Click in the drawing and type. The letters become vector shapes in the current colour, \
-         on the current art layer: select, transform, recolour and erase them like any line. \
-         Cmd+Enter (Ctrl+Enter) or a click elsewhere finishes; Esc cancels.",
+        "Click in the drawing to type, or click existing text to edit it. \
+         Cmd+Enter (Ctrl+Enter) finishes. Esc cancels.",
     );
     ui.add_space(4.0);
     let style = &mut s.text_style;
@@ -86,7 +85,17 @@ fn text_controls(ui: &mut egui::Ui, s: &mut Session) {
             .show_ui(ui, |ui| match font_families(ui.ctx()) {
                 Some(families) => {
                     ui.selectable_value(&mut style.family, String::new(), "System sans");
-                    for f in families {
+                    let key = ui.scope_id().with("font-filter");
+                    let mut filter = ui
+                        .data(|data| data.get_temp::<String>(key))
+                        .unwrap_or_default();
+                    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Filter fonts"));
+                    ui.data_mut(|data| data.insert_temp(key, filter.clone()));
+                    let filter = filter.to_lowercase();
+                    for f in families
+                        .iter()
+                        .filter(|name| name.to_lowercase().contains(&filter))
+                    {
                         ui.selectable_value(&mut style.family, f.clone(), f);
                     }
                 }
@@ -95,6 +104,8 @@ fn text_controls(ui: &mut egui::Ui, s: &mut Session) {
                 }
             });
     });
+    ui.hyperlink_to("Browse Google Fonts", "https://fonts.google.com/")
+        .on_hover_text("Install a font on your computer, then reopen Symphony to use it.");
     size_slider(ui, "Size", &mut style.size, 600.0);
     style.size = style.size.max(1.0);
     ui.horizontal(|ui| {
@@ -113,6 +124,23 @@ fn text_controls(ui: &mut egui::Ui, s: &mut Session) {
             }
         }
     });
+}
+
+fn reduce_point_controls(ui: &mut egui::Ui, s: &mut Session) {
+    if s.can_reduce_points() {
+        ui.collapsing("Reduce stroke points", |ui| {
+            ui.add(
+                egui::DragValue::new(&mut s.point_reduction)
+                    .range(0.1..=30.0)
+                    .speed(0.1)
+                    .prefix("Tolerance ")
+                    .suffix(" px"),
+            );
+            if ui.button("Reduce points").clicked() {
+                s.reduce_points();
+            }
+        });
+    }
 }
 
 fn size_slider(ui: &mut egui::Ui, label: &str, v: &mut f32, recommended: f32) {
@@ -751,6 +779,7 @@ fn tool_properties_body(
                 hint(ui, "Erase the same place in every drawing of the layer, not only the one at this frame.");
             }
             Tool::Select | Tool::Transform => {
+                reduce_point_controls(ui, s);
                 let select = s.tool == Tool::Select;
                 section(ui, if select { "Select" } else { "Transform" });
                 widgets::segmented(
@@ -835,6 +864,14 @@ fn tool_properties_body(
                     PaintMode::Repaint => "Recolours only areas that are already painted.",
                     PaintMode::Unpaint => "Removes the colour from an area.",
                 });
+                widgets::checkbox(
+                    ui,
+                    &mut s.link_bucket_fills,
+                    "Keep new fills linked to lines",
+                )
+                .on_hover_text(
+                    "Refits the fill when its boundary moves or is reshaped with the Line Editor.",
+                );
                 ui.add_space(6.0);
                 widgets::checkbox(ui, &mut s.respect_protected, "Respect protected colours");
                 hint(
@@ -851,6 +888,7 @@ fn tool_properties_body(
             }
             Tool::LineEditor => {
                 section(ui, "Line Editor");
+                reduce_point_controls(ui, s);
                 size_slider(ui, "Radius", &mut s.line_edit_radius, 200.0);
                 s.line_edit_radius = s.line_edit_radius.max(1.0);
                 slider(ui, "Strength", &mut s.line_edit_strength, 0.05..=1.0);
@@ -871,6 +909,10 @@ fn tool_properties_body(
             Tool::Dropper => {
                 section(ui, "Dropper");
                 hint(ui, "Click a line or painted area to pick up its colour.");
+                #[cfg(target_os = "macos")]
+                if ui.button("Pick colour from screen").clicked() {
+                    crate::screen_colour::pick(ui.ctx(), s.key.clone());
+                }
             }
             Tool::Hand => {
                 section(ui, "Hand");

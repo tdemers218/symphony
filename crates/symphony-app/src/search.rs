@@ -30,6 +30,9 @@ pub enum Command {
     ReuseDrawing(symphony_core::id::Id),
     SetFrameRate(f32),
     AddSwatch,
+    ReduceStrokePoints,
+    #[cfg(target_os = "macos")]
+    PickScreenColour,
     ToggleAnimate,
     ShowNodeProperties,
     RenderNodePreview,
@@ -40,7 +43,10 @@ pub enum Command {
     ToggleLayerVisible,
     SelectLayer(usize),
     SelectSwatch(symphony_core::id::Id),
-    UsePreset { pencil: bool, name: String },
+    UsePreset {
+        pencil: bool,
+        name: String,
+    },
     SetArt(symphony_core::stroke::ArtLayer),
     ArrangeNodes,
     ConvertDrawing(symphony_core::graph::NodeId),

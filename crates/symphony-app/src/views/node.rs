@@ -2267,6 +2267,19 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
         }
     }
     let origin = anchor + state.pan;
+    if let Some(item) = resp.dnd_release_payload::<LibraryItem>() {
+        if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
+            let at = (pointer - origin) / zoom;
+            add_library_item(s, state, &item, Some([at.x, at.y]));
+        }
+    } else if resp.dnd_hover_payload::<LibraryItem>().is_some() {
+        painter.rect_stroke(
+            viewport.shrink(2.0),
+            theme::RADIUS_CONTROL,
+            Stroke::new(1.5, theme::ACCENT_SELECT),
+            StrokeKind::Inside,
+        );
+    }
     let grid = GRID * zoom * if zoom < 0.5 { 2.0 } else { 1.0 };
     let grid_origin = viewport.min
         + Vec2::new(
@@ -3329,57 +3342,196 @@ fn socket(
     }
 }
 
-/// Documented names and links come from the Harmony 27 Premium reference index.
-pub fn library(ui: &mut egui::Ui, s: &Session, state: &mut NodeViewState) {
-    egui::Frame::new().inner_margin(egui::Margin::same(theme::CARD_PAD)).show(ui, |ui| {
-        ui.add(egui::TextEdit::singleline(&mut state.library_search).hint_text("Find a node"));
-        let query = state.library_search.trim().to_lowercase();
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if !s.doc.harmony_nodes.is_empty() {
-                ui.heading("Imported scene");
-                ui.label("Layers and exposure timing are editable. Cells have no artwork. Source wiring and attributes are retained. Effects and rigs still need conversion.");
-                for (name, count) in &s.doc.harmony_nodes {
-                    if name.to_lowercase().contains(&query) { ui.label(format!("{name} × {count}")); }
-                }
+#[derive(Clone)]
+enum LibraryItem {
+    Drawing,
+    Node(NodeKind),
+}
+
+fn add_library_item(
+    s: &mut Session,
+    state: &mut NodeViewState,
+    item: &LibraryItem,
+    at: Option<[f32; 2]>,
+) {
+    match item {
+        LibraryItem::Drawing => {
+            let at = at.map(|at| free_spot(s, at, W));
+            s.add_layer_at(at);
+            if let Some(id) = s.doc.layers.get(s.selected).map(|layer| layer.node) {
+                s.select_graph_node(id, true);
             }
-            if !s.doc.harmony_connections.is_empty() {
-                ui.collapsing("Source connections", |ui| {
-                    for link in &s.doc.harmony_connections {
-                        if [link.group.as_str(), link.from.as_str(), link.to.as_str()].iter().any(|name| name.to_lowercase().contains(&query)) {
-                            ui.label(format!("{} [{}] → {} [{}]", link.from, link.output, link.to, link.input))
-                                .on_hover_text(&link.group);
+        }
+        LibraryItem::Node(kind) => match at {
+            Some(at) => add_node(s, fit_to_stage(s, kind.clone()), at),
+            None => add_from_search(s, state, kind.clone()),
+        },
+    }
+}
+
+fn library_details(kind: &NodeKind) -> (&'static str, &'static str) {
+    match kind {
+        NodeKind::Drawing { .. } => (
+            "Artwork",
+            "Exposes a drawing from the Timeline and sends it into the composite.",
+        ),
+        NodeKind::Peg(_) => (
+            "Rigging",
+            "Moves, rotates, scales, or changes the depth of connected artwork.",
+        ),
+        NodeKind::Skeleton(_) => (
+            "Rigging",
+            "Moves the whole bone rig. A new skeleton starts with a connected bone.",
+        ),
+        NodeKind::Bone(_) => (
+            "Rigging",
+            "Poses attached drawings and bends vector artwork around a joint.",
+        ),
+        NodeKind::MeshWarp(_) => (
+            "Rigging",
+            "Deforms artwork with a grid or points placed on the drawing.",
+        ),
+        NodeKind::Composite => (
+            "Compositing",
+            "Stacks image inputs in port order. The leftmost input renders in front.",
+        ),
+        NodeKind::Effect(Effect::Mask { .. }) => (
+            "Compositing",
+            "Uses a matte to reveal or hide parts of an image.",
+        ),
+        NodeKind::Effect(Effect::Blend { .. }) => {
+            ("Compositing", "Blends an image with the artwork behind it.")
+        }
+        NodeKind::Effect(Effect::Opacity { .. }) => (
+            "Compositing",
+            "Adjusts the transparency of the input image.",
+        ),
+        NodeKind::Gradient(_) => (
+            "Artwork",
+            "Generates a two-colour gradient for a background or effect.",
+        ),
+        NodeKind::Effect(Effect::Blur { .. }) => (
+            "Effects",
+            "Softens an image with box, Gaussian, motion or radial blur.",
+        ),
+        NodeKind::Effect(Effect::Grain { .. }) => (
+            "Effects",
+            "Adds an adjustable grain texture to the input image.",
+        ),
+        NodeKind::Display => (
+            "Output",
+            "Shows the final composite in Camera. Every scene starts with one.",
+        ),
+        NodeKind::Write => (
+            "Output",
+            "Marks an output in the node graph. Export is available from the File menu.",
+        ),
+    }
+}
+
+pub fn library(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState) {
+    let mut add = None;
+    egui::Frame::new()
+        .inner_margin(egui::Margin::same(theme::CARD_PAD))
+        .show(ui, |ui| {
+            ui.add(egui::TextEdit::singleline(&mut state.library_search).hint_text("Find a node"));
+            let query = state.library_search.trim().to_lowercase();
+            let drawing = NodeKind::Drawing {
+                column: symphony_core::id::Id(0),
+            };
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for group in ["Artwork", "Rigging", "Compositing", "Effects", "Output"] {
+                    let items: Vec<_> = std::iter::once(drawing.clone())
+                        .chain(addable_nodes())
+                        .chain([NodeKind::Display, NodeKind::Write])
+                        .filter(|kind| {
+                            let (category, description) = library_details(kind);
+                            category == group
+                                && [kind_label(kind), category, description]
+                                    .iter()
+                                    .any(|text| text.to_lowercase().contains(&query))
+                        })
+                        .collect();
+                    if items.is_empty() {
+                        continue;
+                    }
+                    ui.heading(group);
+                    for kind in items {
+                        let title = kind_label(&kind);
+                        let (_, description) = library_details(&kind);
+                        let item = match kind {
+                            NodeKind::Drawing { .. } => Some(LibraryItem::Drawing),
+                            NodeKind::Display | NodeKind::Write => None,
+                            _ => Some(LibraryItem::Node(kind)),
+                        };
+                        ui.horizontal(|ui| {
+                            let sense = if item.is_some() {
+                                Sense::drag()
+                            } else {
+                                Sense::hover()
+                            };
+                            let name = ui.add(egui::Label::new(title).sense(sense));
+                            if let Some(item) = item {
+                                name.dnd_set_drag_payload(item.clone());
+                                if ui
+                                    .small_button("Add")
+                                    .on_hover_text(format!("Add {title}"))
+                                    .clicked()
+                                {
+                                    add = Some(item);
+                                }
+                            }
+                        });
+                        ui.label(egui::RichText::new(description).color(theme::TEXT_SECONDARY));
+                        ui.add_space(5.0);
+                    }
+                }
+                if !s.doc.harmony_nodes.is_empty() {
+                    ui.collapsing("Imported scene", |ui| {
+                        for (name, count) in &s.doc.harmony_nodes {
+                            if name.to_lowercase().contains(&query) {
+                                ui.label(format!("{name} × {count}"));
+                            }
+                        }
+                        for link in &s.doc.harmony_connections {
+                            if [link.group.as_str(), link.from.as_str(), link.to.as_str()]
+                                .iter()
+                                .any(|name| name.to_lowercase().contains(&query))
+                            {
+                                ui.label(format!(
+                                    "{} [{}] → {} [{}]",
+                                    link.from, link.output, link.to, link.input
+                                ));
+                            }
+                        }
+                    });
+                }
+                ui.collapsing("Harmony reference", |ui| {
+                    for row in
+                        include_str!("../../../../docs/reference/harmony-27-nodes.tsv").lines()
+                    {
+                        let mut fields = row.split('\t');
+                        let (Some(category), Some(name), Some(path)) =
+                            (fields.next(), fields.next(), fields.next())
+                        else {
+                            continue;
+                        };
+                        if category.to_lowercase().contains(&query)
+                            || name.to_lowercase().contains(&query)
+                        {
+                            ui.hyperlink_to(
+                                name,
+                                format!("https://docs.toonboom.com/help/harmony-27/premium/{path}"),
+                            )
+                            .on_hover_text(category);
                         }
                     }
                 });
-            }
-            ui.heading("Symphony nodes");
-            for &(id, name) in symphony_io::harmony::NODE_LIBRARY {
-                if name.to_lowercase().contains(&query) || id.to_lowercase().contains(&query) {
-                    let name = if name == "Display" { "Camera" } else { name };
-                    ui.label(format!("{name} ({id})"));
-                }
-            }
-            for kind in [NodeKind::Skeleton(Default::default()), NodeKind::Bone(Default::default())]
-                .into_iter().chain(effect_nodes())
-            {
-                let name = kind_label(&kind);
-                if name.to_lowercase().contains(&query) {
-                    ui.label(name);
-                }
-            }
-            ui.heading("Harmony reference");
-            let mut matches = 0;
-            for row in include_str!("../../../../docs/reference/harmony-27-nodes.tsv").lines() {
-                let mut fields = row.split('\t');
-                let (Some(category), Some(name), Some(path)) = (fields.next(), fields.next(), fields.next()) else {continue};
-                if category.contains(&query) || name.to_lowercase().contains(&query) {
-                    ui.hyperlink_to(name, format!("https://docs.toonboom.com/help/harmony-27/premium/{path}")).on_hover_text(category);
-                    matches += 1;
-                }
-            }
-            if matches == 0 { ui.label("No matching reference entries."); }
+            });
         });
-    });
+    if let Some(item) = add {
+        add_library_item(s, state, &item, None);
+    }
 }
 
 pub fn drawing_conversion_label(s: &Session, id: NodeId) -> Option<&'static str> {

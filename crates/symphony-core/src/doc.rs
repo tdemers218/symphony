@@ -514,6 +514,7 @@ impl Scene {
             strokes: Vec::new(),
             fills: Vec::new(),
             image: None,
+            text: Vec::new(),
         }
     }
 

@@ -214,7 +214,14 @@ fn trace_paint_zone(
 
     let mut loops = trace(&zone, w, h);
     for l in loops.iter_mut() {
-        *l = simplify(l, 0.75);
+        // Reconstruct diagonals from the raster staircase before simplifying.
+        // The half-cell displacement stays safely inside the ink tuck.
+        let midpoints: Vec<_> = l
+            .iter()
+            .zip(l.iter().cycle().skip(1))
+            .map(|(a, b)| ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5))
+            .collect();
+        *l = simplify(&midpoints, 0.55);
     }
     loops.retain(|l| l.len() >= 3);
     loops.sort_by(|a, b| area(b).abs().total_cmp(&area(a).abs()));
@@ -484,6 +491,7 @@ mod tests {
 
     fn as_fill(contours: Vec<Vec<[f32; 2]>>) -> Fill {
         Fill {
+            linked: None,
             id: Id(9),
             swatch: Id(2),
             art: ArtLayer::LineArt,
