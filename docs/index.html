@@ -150,10 +150,50 @@
         <div>
           <dt>Turn brush tips into editable vectors</dt>
           <dd>
-            Use imported brush presets with supported pen dynamics, or trace their tips into editable vector outlines you can reshape and recolour.
+            Bring in brushes from Photoshop, Krita, Procreate, and more. Trace imported brush tips into editable outlines you can reshape and recolour. Editable strokes retain supported pen input, including pressure, tilt, and barrel rotation.
             <picture>
               <source media="(prefers-reduced-motion: reduce)" srcset="presentation/editable-brush-tips.png">
               <img src="presentation/editable-brush-tips.gif" width="720" height="400" loading="lazy" alt="The same imported chisel brush in Bitmap mode, then in Vector mode.">
+            </picture>
+          </dd>
+        </div>
+        <div>
+          <dt>Bend a line as you draw</dt>
+          <dd>
+            Hold Alt while drawing with the Line tool to bend the stroke between its endpoints. Hold Shift to snap the angle in 22.5° steps.
+            <picture>
+              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/bend-a-line.png">
+              <img src="presentation/bend-a-line.gif" width="720" height="400" loading="lazy" alt="The Line tool draws a straight stroke, then bends it into an arc between the same endpoints.">
+            </picture>
+          </dd>
+        </div>
+        <div>
+          <dt>Recolour drawings from one swatch</dt>
+          <dd>
+            Edit a scene palette colour once and every stroke or fill linked to it updates together.
+            <picture>
+              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/linked-palette.png">
+              <img src="presentation/linked-palette.gif" width="720" height="400" loading="lazy" alt="Changing the Skin swatch recolours the character in the Camera view.">
+            </picture>
+          </dd>
+        </div>
+        <div>
+          <dt>Stage a multiplane camera move</dt>
+          <dd>
+            Set depth on drawing pegs and animate the camera for parallax. Maintain Size keeps the drawing in place while you set its depth.
+            <picture>
+              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/multiplane-parallax.png">
+              <img src="presentation/multiplane-parallax.gif" width="720" height="400" loading="lazy" alt="A camera pan shifts the foreground character more than the distant horizon.">
+            </picture>
+          </dd>
+        </div>
+        <div>
+          <dt>Position artwork with effects paused</dt>
+          <dd>
+            Switch off Render effects while positioning artwork in Camera. Turn off Bars to see artwork outside the frame while keeping exports framed.
+            <picture>
+              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/draft-camera.png">
+              <img src="presentation/draft-camera.gif" width="720" height="400" loading="lazy" alt="The Camera view shows the same scene with its blur effect on, then temporarily bypassed.">
             </picture>
           </dd>
         </div>
@@ -170,7 +210,7 @@
         <div>
           <dt>Untangle a node graph</dt>
           <dd>
-            Arrange Nodes lays out the graph by signal flow. As you drag a node, nearby cards slide out of its way.
+            Arrange Nodes lays out the graph by signal flow. Select a node to highlight its cables and ports, or drag it to make nearby cards slide out of the way.
             <picture>
               <source media="(prefers-reduced-motion: reduce)" srcset="presentation/node-layout.png">
               <img src="presentation/node-layout.gif" width="720" height="400" loading="lazy" alt="Arrange Nodes sorts a cluttered graph into rows so the connections are easier to follow.">
@@ -184,6 +224,16 @@
             <picture>
               <source media="(prefers-reduced-motion: reduce)" srcset="presentation/insert-in-betweens.png">
               <img src="presentation/insert-in-betweens.gif" width="720" height="400" loading="lazy" alt="Eight frames are inserted at the playhead and the held exposures and later keys move together.">
+            </picture>
+          </dd>
+        </div>
+        <div>
+          <dt>Choose a separate movie frame rate</dt>
+          <dd>
+            Animate at your scene’s frame rate and choose a different rate for the movie export. Symphony resamples the timing to keep the shot’s duration.
+            <picture>
+              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/movie-cadence.png">
+              <img src="presentation/movie-cadence.gif" width="720" height="400" loading="lazy" alt="The Export Movie dialog switches from the 24 fps scene rate to 48 fps.">
             </picture>
           </dd>
         </div>

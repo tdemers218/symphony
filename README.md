@@ -10,10 +10,15 @@ node-based compositing.
 
 ## Key features on the development branch
 
-- **Turn brush tips into editable vectors.** Use imported brush presets with supported pen dynamics, or trace their tips into editable vector outlines you can reshape and recolour.
+- **Turn brush tips into editable vectors.** Bring in brushes from Photoshop, Krita, Procreate, and more. Trace imported brush tips into editable outlines you can reshape and recolour. Editable strokes retain supported pen input, including pressure, tilt, and barrel rotation.
+- **Bend a line as you draw.** Hold Alt while drawing with the Line tool to bend the stroke between its endpoints. Hold Shift to snap the angle in 22.5° steps.
+- **Recolour drawings from one swatch.** Edit a scene palette colour once and every stroke or fill linked to it updates together.
+- **Stage a multiplane camera move.** Set depth on drawing pegs and animate the camera for parallax. Maintain Size keeps the drawing in place while you set its depth.
+- **Position artwork with effects paused.** Switch off Render effects while positioning artwork in Camera. Turn off Bars to see artwork outside the frame while keeping exports framed.
 - **Resume an interrupted export.** Restart the same export to reuse finished frames after a crash or cancellation. This works for movies, GIFs, and image sequences.
-- **Untangle a node graph.** Arrange Nodes lays out the graph by signal flow. As you drag a node, nearby cards slide out of its way.
+- **Untangle a node graph.** Arrange Nodes lays out the graph by signal flow. Select a node to highlight its cables and ports, or drag it to make nearby cards slide out of the way.
 - **Make room for in-betweens.** Insert frames after the playhead. Current exposures hold through the gap, and later exposures and peg keys shift together.
+- **Choose a separate movie frame rate.** Animate at your scene’s frame rate and choose a different rate for the movie export. Symphony resamples the timing to keep the shot’s duration.
 - **Turn a drawing into an editable matte.** Switch a drawing to a mask and back while keeping its artwork, exposures, and node connections.
 - **Find actions with Tab Search.** Type what you want to do. Results prioritize the panel you’re working in, from adding an effect to running a timing command.
 
