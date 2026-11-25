@@ -572,6 +572,99 @@ fn tool_icon(t: Tool) -> Icon {
     }
 }
 
+fn tool_flyout(
+    ui: &egui::Ui,
+    button: &egui::Response,
+    modes: &[(Icon, &str, bool)],
+) -> Option<usize> {
+    if modes.is_empty() {
+        return None;
+    }
+    let id = button.id.with("tool-modes");
+    let mut hover_since = ui.data(|data| data.get_temp::<Option<f64>>(id).flatten());
+    let mut drag_open = ui
+        .data(|data| data.get_temp::<bool>(id.with("drag")))
+        .unwrap_or(false);
+    let (now, pointer, released) = ui.input(|input| {
+        (
+            input.time,
+            input.pointer.hover_pos(),
+            input.pointer.button_released(egui::PointerButton::Primary),
+        )
+    });
+    let screen = ui.ctx().content_rect();
+    let size = egui::vec2(154.0, 10.0 + modes.len() as f32 * 29.0);
+    let mut at = if ui.layout().is_horizontal() {
+        egui::pos2(button.rect.left(), button.rect.bottom() + 2.0)
+    } else {
+        egui::pos2(button.rect.right() + 2.0, button.rect.top())
+    };
+    if at.x + size.x > screen.right() && !ui.layout().is_horizontal() {
+        at.x = button.rect.left() - size.x - 2.0;
+    }
+    if at.y + size.y > screen.bottom() && ui.layout().is_horizontal() {
+        at.y = button.rect.top() - size.y - 2.0;
+    }
+    at.x =
+        at.x.clamp(screen.left(), (screen.right() - size.x).max(screen.left()));
+    at.y =
+        at.y.clamp(screen.top(), (screen.bottom() - size.y).max(screen.top()));
+    let region = button
+        .rect
+        .union(egui::Rect::from_min_size(at, size))
+        .expand(8.0);
+    let down_here = button.is_pointer_button_down_on();
+    drag_open |=
+        button.drag_started() || down_here && pointer.is_some_and(|p| !button.rect.contains(p));
+    let delay = 0.28;
+    if button.contains_pointer() {
+        let started = *hover_since.get_or_insert(now);
+        if now - started < delay {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(delay - (now - started)));
+        }
+    } else if !pointer.is_some_and(|p| region.contains(p)) {
+        hover_since = None;
+    }
+    let mut choice = None;
+    if drag_open || hover_since.is_some_and(|started| now - started >= delay) {
+        egui::Area::new(id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(at)
+            .show(ui.ctx(), |ui| {
+                theme::glass_window_frame(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(138.0);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (index, &(icon, label, active)) in modes.iter().enumerate() {
+                        let row = ui.horizontal(|ui| {
+                            let icon = icons::button(ui, icon, active, true, "");
+                            let name = ui.selectable_label(active, label);
+                            icon.clicked() || name.clicked()
+                        });
+                        if row.inner
+                            || drag_open
+                                && released
+                                && pointer.is_some_and(|p| row.response.rect.contains(p))
+                        {
+                            choice = Some(index);
+                        }
+                    }
+                });
+            });
+    }
+    if released || !ui.input(|input| input.pointer.primary_down()) {
+        drag_open = false;
+    }
+    if choice.is_some() {
+        hover_since = None;
+    }
+    ui.data_mut(|data| {
+        data.insert_temp(id, hover_since);
+        data.insert_temp(id.with("drag"), drag_open);
+    });
+    choice
+}
+
 fn tool_action(t: Tool) -> Action {
     match t {
         Tool::Select => Action::ToolSelect,
@@ -2231,6 +2324,7 @@ impl SymphonyApp {
                 }
                 // Both tips make vector strokes. The icon shows whether
                 // the current brush uses a texture.
+                Tool::Brush if self.s.tool == Tool::Pencil => Icon::Pencil,
                 Tool::Brush if !crate::views::panels::is_bitmap(&self.s.brush) => Icon::Pen,
                 Tool::Brush => Icon::Brush,
                 Tool::Transform => {
@@ -2245,16 +2339,73 @@ impl SymphonyApp {
             let response = icons::tool_button(
                 ui,
                 icon,
-                self.s.tool == tool,
+                self.s.tool == tool || tool == Tool::Brush && self.s.tool == Tool::Pencil,
                 tool.planned_for().is_none(),
                 &tip,
             );
-            if response.clicked() {
+            if response.clicked() && (tool != Tool::Brush || self.s.tool != Tool::Pencil) {
                 self.s.tool = tool;
             }
             if response.double_clicked() {
-                self.s.tool = tool;
                 self.open_tool_properties();
+            }
+            let modes: &[(Icon, &str, bool)] = match tool {
+                Tool::Select => &[
+                    (
+                        Icon::Select,
+                        "Select",
+                        self.s.tool == Tool::Select && !self.s.cutter_mode,
+                    ),
+                    (
+                        Icon::Cutter,
+                        "Cutter",
+                        self.s.tool == Tool::Select && self.s.cutter_mode,
+                    ),
+                ],
+                Tool::Brush => &[
+                    (
+                        Icon::Pen,
+                        "Vector brush",
+                        self.s.tool == Tool::Brush && !views::panels::is_bitmap(&self.s.brush),
+                    ),
+                    (
+                        Icon::Brush,
+                        "Textured brush",
+                        self.s.tool == Tool::Brush && views::panels::is_bitmap(&self.s.brush),
+                    ),
+                    (Icon::Pencil, "Pencil", self.s.tool == Tool::Pencil),
+                ],
+                _ => &[],
+            };
+            if !modes.is_empty() {
+                let corner = response.rect.right_bottom() - egui::vec2(4.0, 4.0);
+                ui.painter().add(egui::Shape::convex_polygon(
+                    vec![
+                        corner,
+                        corner - egui::vec2(4.0, 0.0),
+                        corner - egui::vec2(0.0, 4.0),
+                    ],
+                    theme::TEXT_SECONDARY,
+                    egui::Stroke::NONE,
+                ));
+            }
+            if let Some(choice) = tool_flyout(ui, &response, modes) {
+                match tool {
+                    Tool::Select => {
+                        self.s.tool = Tool::Select;
+                        self.s.cutter_mode = choice == 1;
+                    }
+                    Tool::Brush if choice == 2 => self.s.tool = Tool::Pencil,
+                    Tool::Brush => {
+                        self.s.tool = Tool::Brush;
+                        views::panels::set_bitmap_brush(
+                            &mut self.s,
+                            &mut self.presets,
+                            choice == 1,
+                        );
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -3054,7 +3205,23 @@ impl SymphonyApp {
         let Some(mut st) = self.palette.take() else {
             return;
         };
-        let entries = self.search_entries();
+        let mut entries = self.search_entries();
+        if st.query.trim().eq_ignore_ascii_case("undo") {
+            let applied: Vec<_> = self
+                .s
+                .history
+                .entries()
+                .take(self.s.history.undo_len())
+                .collect();
+            for (index, name) in applied.into_iter().rev().take(4).enumerate() {
+                entries.push(search::Entry::new(
+                    &format!("Undo through {name}"),
+                    search::Kind::Action,
+                    search::Command::UndoThrough(index + 1),
+                    &format!("history.undo.{index}"),
+                ));
+            }
+        }
         let uses = self.search_uses.clone();
         match views::palette::ui(
             ctx,
@@ -3087,10 +3254,16 @@ impl SymphonyApp {
             }
             Command::PerspectiveGuide(mode) => self.s.guides.perspective = mode,
             Command::ShowOnionAlignment => {
-                self.s.onion.on = true;
-                ctx.data_mut(|data| {
-                    data.insert_temp(egui::Id::unique("onion-alignment-open"), true)
-                });
+                self.s.begin_onion_alignment();
+                if !matches!(self.hovered_view, Some(View::Camera | View::Drawing)) {
+                    self.maximised = None;
+                    self.show_view(View::Camera);
+                }
+            }
+            Command::UndoThrough(steps) => {
+                for _ in 0..steps.min(self.s.history.undo_len()) {
+                    self.s.undo();
+                }
             }
 
             Command::Action(a) => self.run(ctx, a),
@@ -3590,20 +3763,6 @@ impl SymphonyApp {
             return;
         }
         self.import_paths(ctx, paths);
-    }
-
-    fn workflow_windows(&mut self, ctx: &egui::Context) {
-        let alignment_id = egui::Id::unique("onion-alignment-open");
-        let mut alignment = ctx
-            .data(|data| data.get_temp::<bool>(alignment_id))
-            .unwrap_or(false);
-        if alignment {
-            egui::Window::new("Align onion skins")
-                .collapsible(false)
-                .open(&mut alignment)
-                .show(ctx, |ui| views::camera::onion_alignment(ui, &mut self.s));
-            ctx.data_mut(|data| data.insert_temp(alignment_id, alignment));
-        }
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -4762,7 +4921,6 @@ impl SymphonyApp {
 
         self.search_box(&ctx);
         self.timing.bookmark_window(&ctx, &mut self.s);
-        self.workflow_windows(&ctx);
         self.dialogs(&ctx);
 
         let pending = self.pen.as_ref().is_some_and(|p| p.has_pending());

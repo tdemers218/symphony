@@ -116,6 +116,84 @@ pub fn cut(stroke: &Stroke, eraser: &[Disc], cut_tip: Tip) -> Option<Vec<Stroke>
     )
 }
 
+/// Split a solid vector stroke's centreline at each cutter crossing.
+pub fn split_path(stroke: &Stroke, clip: &crate::shape::Shape) -> Option<Vec<(bool, Stroke)>> {
+    if !stroke.shape.is_empty() || stroke.texture.is_some() || stroke.points.len() < 2 {
+        return None;
+    }
+    let cross = |a: [f32; 2], b: [f32; 2]| a[0] * b[1] - a[1] * b[0];
+    let edges: Vec<_> = clip
+        .iter()
+        .flat_map(|ring| {
+            ring.iter()
+                .copied()
+                .zip(ring.iter().copied().cycle().skip(1))
+        })
+        .collect();
+    let points = crate::curve::spline(&stroke.points, 0.5);
+    let mut runs: Vec<(bool, Vec<Point>)> = Vec::new();
+    for pair in points.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        let line = [b.x - a.x, b.y - a.y];
+        let mut cuts = vec![0.0_f32, 1.0];
+        for &(p, q) in &edges {
+            let edge = [q[0] - p[0], q[1] - p[1]];
+            let d = cross(line, edge);
+            if d.abs() < 1e-7 {
+                continue;
+            }
+            let offset = [p[0] - a.x, p[1] - a.y];
+            let t = cross(offset, edge) / d;
+            let u = cross(offset, line) / d;
+            if t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&u) {
+                cuts.push(t);
+            }
+        }
+        cuts.sort_by(f32::total_cmp);
+        cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        for span in cuts.windows(2) {
+            let mid = lerp(a, b, (span[0] + span[1]) * 0.5);
+            let inside = crate::shape::hits_shape(clip, mid.x, mid.y, 0.0);
+            let end = lerp(a, b, span[1]);
+            if let Some((_, run)) = runs.last_mut().filter(|(side, _)| *side == inside) {
+                run.push(end);
+            } else {
+                runs.push((inside, vec![lerp(a, b, span[0]), end]));
+            }
+        }
+    }
+    if runs.len() < 2 {
+        return None;
+    }
+    let closed = points
+        .first()
+        .zip(points.last())
+        .is_some_and(|(a, b)| (a.x - b.x).hypot(a.y - b.y) < 1e-5);
+    if closed && runs.first().map(|run| run.0) == runs.last().map(|run| run.0) {
+        let (_, mut tail) = runs.pop()?;
+        tail.extend(runs[0].1.iter().copied().skip(1));
+        runs[0].1 = tail;
+    }
+    let count = runs.len();
+    let span = stroke.max_width - stroke.min_width;
+    Some(
+        runs.into_iter()
+            .enumerate()
+            .map(|(index, (inside, points))| {
+                let mut piece = stroke.clone();
+                piece.points = crate::curve::simplify(&points, 0.03, span);
+                if closed || index > 0 {
+                    piece.tips.start = Tip::Flat;
+                }
+                if closed || index + 1 < count {
+                    piece.tips.end = Tip::Flat;
+                }
+                (inside, piece)
+            })
+            .collect(),
+    )
+}
+
 /// Remove points that sit on the straight line between their neighbours
 /// (the densified ones), keeping the line's shape and pressure.
 fn simplify(pts: Vec<Point>, original: usize) -> Vec<Point> {

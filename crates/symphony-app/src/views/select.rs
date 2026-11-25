@@ -760,7 +760,7 @@ fn pick(
 }
 
 /// The box around a drawing's strokes and colour zones.
-fn drawing_bounds(d: &symphony_core::stroke::Drawing) -> Option<([f32; 2], [f32; 2])> {
+pub(super) fn drawing_bounds(d: &symphony_core::stroke::Drawing) -> Option<([f32; 2], [f32; 2])> {
     let zones = d.fills.iter().flat_map(|f| f.contours.iter().flatten());
     let strokes = bounds_of(&d.strokes);
     let mut acc = strokes;

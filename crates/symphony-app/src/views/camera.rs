@@ -312,11 +312,7 @@ fn fit_zoom(rect: Rect, w: f32, h: f32) -> f32 {
 /// Scene units -> screen points for this canvas rect. The zoom is
 /// absolute: the rect only places the centre.
 fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, transform: Affine, s: &mut Session) -> bool {
-    if !matches!(s.tool, Tool::Transform | Tool::Select)
-        || s.tool == Tool::Select && s.selection.strokes.is_empty()
-        || canvas.width() < 170.0
-        || canvas.height() < 60.0
-    {
+    if s.tool != Tool::Transform || canvas.width() < 180.0 || canvas.height() < 118.0 {
         return false;
     }
     let Some(peg) = s.transform_peg(s.selected).filter(|peg| peg.tilt_enabled) else {
@@ -326,39 +322,121 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, transform: Affine, s: &mut Ses
         .tilt
         .as_ref()
         .map_or([0.0; 2], |tilt| [tilt[0].at(s.frame), tilt[1].at(s.frame)]);
+    let roll = peg.rotation.at(s.frame);
     let pivot = to_pos(transform.apply(peg.pivot.0, peg.pivot.1));
-    let x = (pivot.x + 22.0).clamp(canvas.left() + 8.0, canvas.right() - 152.0);
-    let y = (pivot.y - 42.0).clamp(canvas.top() + 8.0, canvas.bottom() - 36.0);
-    let glyphs = Rect::from_min_size(Pos2::new(x, y), Vec2::new(144.0, 28.0));
-    ui.painter()
-        .rect_filled(glyphs, theme::RADIUS_CONTROL, theme::GLASS_FLOATING);
-    let locked = s.doc.column(s.selected).is_some_and(|column| column.locked);
-    let mut busy = false;
-    if !locked {
-        for (axis, label) in ["Tilt X ", "Tilt Y "].into_iter().enumerate() {
-            let rect = Rect::from_min_size(
-                glyphs.left_top() + Vec2::new(3.0 + 71.0 * axis as f32, 2.0),
-                Vec2::new(67.0, 24.0),
-            );
-            let response = ui
-                .put(
-                    rect,
-                    egui::DragValue::new(&mut angles[axis])
-                        .prefix(label)
-                        .suffix("°")
-                        .range(-180.0..=180.0)
-                        .speed(0.6),
+    let centre = Pos2::new(
+        (pivot.x + 75.0).clamp(canvas.left() + 51.0, canvas.right() - 51.0),
+        (pivot.y - 38.0).clamp(canvas.top() + 51.0, canvas.bottom() - 51.0),
+    );
+    let rect = Rect::from_center_size(centre, Vec2::splat(98.0));
+    let response = ui.interact(rect, ui.scope_id().with("peg-orientation"), Sense::drag());
+    let drag_id = response.id.with("axis");
+    let rings = [(27.0, 11.0, -0.68), (27.0, 11.0, 0.68), (31.0, 31.0, 0.0)];
+    let point_on = |(a, b, rotation): (f32, f32, f32), t: f32| {
+        centre + egui::emath::Rot2::from_angle(rotation) * egui::vec2(a * t.cos(), b * t.sin())
+    };
+    let paths = rings.map(|ring| {
+        (0..=48)
+            .map(|i| point_on(ring, i as f32 * std::f32::consts::TAU / 48.0))
+            .collect::<Vec<_>>()
+    });
+    let nearest = |p: Pos2| {
+        paths
+            .iter()
+            .enumerate()
+            .map(|(axis, path)| {
+                (
+                    axis,
+                    path.iter()
+                        .map(|q| p.distance_sq(*q))
+                        .fold(f32::INFINITY, f32::min),
                 )
-                .on_hover_text("Drag to tilt the drawing plane");
-            busy |= response.contains_pointer() || response.dragged() || response.drag_stopped();
-            if response.changed() {
-                s.set_selected_peg_tilt(true, angles);
-            }
-            if response.drag_stopped() || response.lost_focus() {
-                s.end_gesture();
+            })
+            .filter(|(_, distance)| *distance < 64.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(axis, _)| axis)
+    };
+    let hover = ui.ctx().pointer_hover_pos().and_then(nearest);
+    if response.drag_started() {
+        let axis = ui
+            .input(|input| input.pointer.press_origin())
+            .and_then(nearest)
+            .or(hover);
+        ui.data_mut(|data| data.insert_temp(drag_id, axis));
+    }
+    let active = ui
+        .data(|data| data.get_temp::<Option<usize>>(drag_id))
+        .flatten();
+    let colours = [
+        egui::Color32::from_rgb(230, 132, 133),
+        egui::Color32::from_rgb(132, 198, 158),
+        egui::Color32::from_rgb(129, 168, 228),
+    ];
+    let painter = ui.painter().with_clip_rect(canvas);
+    painter.circle_filled(centre, 39.0, theme::GLASS_FLOATING);
+    for (axis, path) in paths.into_iter().enumerate() {
+        let highlighted = active.or(hover) == Some(axis);
+        painter.add(egui::Shape::line(
+            path,
+            EStroke::new(if highlighted { 2.4 } else { 1.3 }, colours[axis]),
+        ));
+    }
+    let cube = (0..8)
+        .map(|i| {
+            let x = if i & 1 != 0 { 9.0 } else { -9.0 };
+            let y = if i & 2 != 0 { 9.0 } else { -9.0 };
+            let z = if i & 4 != 0 { 9.0 } else { -9.0 };
+            let (sx, cx) = (angles[0] + 23.0).to_radians().sin_cos();
+            let (sy, cy) = (angles[1] - 28.0).to_radians().sin_cos();
+            let yz = y * sx + z * cx;
+            centre
+                + egui::emath::Rot2::from_angle(roll.to_radians())
+                    * egui::vec2(x * cy + yz * sy, y * cx - z * sx)
+        })
+        .collect::<Vec<_>>();
+    for i in 0..8 {
+        for bit in [1, 2, 4] {
+            if i & bit == 0 {
+                painter.line_segment(
+                    [cube[i], cube[i | bit]],
+                    EStroke::new(1.15, theme::TEXT_PRIMARY),
+                );
             }
         }
     }
+    let locked = s.doc.column(s.selected).is_some_and(|column| column.locked);
+    if let Some(axis) =
+        active.filter(|_| !locked && response.dragged_by(egui::PointerButton::Primary))
+    {
+        let delta = response.drag_delta();
+        if axis == 2 {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                let previous = pointer - centre - delta;
+                let current = pointer - centre;
+                let rotation = (previous.x * current.y - previous.y * current.x)
+                    .atan2(previous.dot(current))
+                    .to_degrees();
+                s.adjust_peg(s.selected, |values| values.rotation += rotation);
+            }
+        } else {
+            let motion = if axis == 0 { -delta.y } else { delta.x };
+            angles[axis] = (angles[axis] + motion + 180.0).rem_euclid(360.0) - 180.0;
+            s.set_selected_peg_tilt(true, angles);
+        }
+    }
+    let busy = response.contains_pointer() || response.dragged() || response.drag_stopped();
+    if response.drag_stopped() {
+        ui.data_mut(|data| data.remove::<Option<usize>>(drag_id));
+        if active.is_some() {
+            s.end_gesture();
+        }
+    }
+    response.on_hover_text(match hover {
+        Some(0) => "Rotate the peg around X",
+        Some(1) => "Rotate the peg around Y",
+        Some(_) => "Rotate the peg around Z",
+        None => "Drag an axis ring to rotate the peg",
+    });
     busy
 }
 
@@ -734,51 +812,57 @@ fn dense_label(ui: &mut egui::Ui, text: impl Into<String>) {
     );
 }
 
-pub(crate) fn onion_alignment(ui: &mut egui::Ui, s: &mut Session) {
-    use crate::session::OnionAlignment;
-    for (label, alignment) in ["Previous drawings", "Next drawings"]
-        .into_iter()
-        .zip(&mut s.onion.alignment)
-    {
-        ui.push_id(label, |ui| {
-            ui.label(egui::RichText::new(label).strong());
-            ui.horizontal_wrapped(|ui| {
-                for (label, axis) in ["X ", "Y "].into_iter().zip(&mut alignment.offset) {
-                    ui.add(
-                        egui::DragValue::new(axis)
-                            .prefix(label)
-                            .range(-100_000.0..=100_000.0),
-                    );
-                }
-                ui.add(
-                    egui::DragValue::new(&mut alignment.rotation)
-                        .prefix("Angle ")
-                        .suffix("°")
-                        .range(-360.0..=360.0),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut alignment.scale)
-                        .prefix("Scale ×")
-                        .range(0.05..=20.0)
-                        .speed(0.01),
-                );
-            });
-            if ui
-                .add_enabled(
-                    *alignment != OnionAlignment::default(),
-                    egui::Button::new("Reset"),
-                )
-                .clicked()
-            {
-                *alignment = OnionAlignment::default();
-            }
-        });
+fn edit_onion_skin(
+    ui: &mut egui::Ui,
+    response: &egui::Response,
+    s: &mut Session,
+    transform: Affine,
+    navigating: bool,
+) {
+    let Some((_, side)) = s.onion.alignment_edit else {
+        return;
+    };
+    if navigating || !response.dragged_by(egui::PointerButton::Primary) {
+        return;
     }
-    if ui
-        .add_enabled(onion_shifted(s), egui::Button::new("Reset both"))
-        .clicked()
-    {
-        s.onion.alignment = Default::default();
+    let Some(inverse) = transform.inverse() else {
+        return;
+    };
+    let delta = response.drag_delta();
+    if ui.input(|input| input.modifiers.shift) {
+        let (before, after) = s.onion_drawings();
+        let drawing = if side == 0 { before } else { after };
+        let Some((lo, hi)) = drawing
+            .first()
+            .and_then(|id| s.doc.drawings.get(id))
+            .and_then(select::drawing_bounds)
+        else {
+            return;
+        };
+        let Some(pointer) = response.interact_pointer_pos() else {
+            return;
+        };
+        let pivot = ((lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5);
+        let alignment = &mut s.onion.alignment[side];
+        let centre = alignment.transform().apply(pivot.0, pivot.1);
+        let local = |p: Pos2| {
+            let (x, y) = inverse.apply(p.x, p.y);
+            Vec2::new(x - centre.0, y - centre.1)
+        };
+        let (previous, current) = (local(pointer - delta), local(pointer));
+        alignment.rotation = (alignment.rotation
+            + (previous.x * current.y - previous.y * current.x)
+                .atan2(previous.dot(current))
+                .to_degrees())
+        .rem_euclid(360.0);
+        let moved = alignment.transform().apply(pivot.0, pivot.1);
+        alignment.offset[0] += centre.0 - moved.0;
+        alignment.offset[1] += centre.1 - moved.1;
+    } else {
+        let (x, y) = inverse.apply(delta.x, delta.y);
+        let alignment = &mut s.onion.alignment[side];
+        alignment.offset[0] += x - inverse.tx;
+        alignment.offset[1] += y - inverse.ty;
     }
 }
 
@@ -815,81 +899,121 @@ fn top_toolbar(
                 } else {
                     "Off".to_owned()
                 };
-                ui.menu_button(egui::RichText::new(summary).font(theme::dense()), |ui| {
-                    ui.set_min_width(220.0);
-                    ui.checkbox(&mut s.onion.on, "Onion skin");
-                    let counts: [(&str, Action, Action, bool); 2] = [
-                        (
-                            "Previous drawings",
-                            Action::OnionLessPrevious,
-                            Action::OnionMorePrevious,
-                            true,
-                        ),
-                        (
-                            "Next drawings",
-                            Action::OnionLessNext,
-                            Action::OnionMoreNext,
-                            false,
-                        ),
-                    ];
-                    for (label, less, more, before) in counts {
-                        ui.horizontal(|ui| {
-                            dense_label(ui, label);
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let n = if before {
-                                        s.onion.before
-                                    } else {
-                                        s.onion.after
-                                    };
-                                    if icons::button(
-                                        ui,
-                                        Icon::Plus,
-                                        false,
-                                        n < 9,
-                                        &keymap::tooltip(profile, more),
-                                    )
-                                    .clicked()
-                                    {
-                                        s.onion_step(before, 1);
-                                    }
-                                    dense_label(ui, n.to_string());
-                                    if icons::button(
-                                        ui,
-                                        Icon::Minus,
-                                        false,
-                                        n > 0,
-                                        &keymap::tooltip(profile, less),
-                                    )
-                                    .clicked()
-                                    {
-                                        s.onion_step(before, -1);
-                                    }
-                                },
-                            );
+                let settings = ui
+                    .button(egui::RichText::new(summary).font(theme::dense()))
+                    .on_hover_text("Onion skin settings");
+                egui::Popup::menu(&settings)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        ui.set_min_width(220.0);
+                        let counts: [(&str, Action, Action, bool); 2] = [
+                            (
+                                "Previous drawings",
+                                Action::OnionLessPrevious,
+                                Action::OnionMorePrevious,
+                                true,
+                            ),
+                            (
+                                "Next drawings",
+                                Action::OnionLessNext,
+                                Action::OnionMoreNext,
+                                false,
+                            ),
+                        ];
+                        for (label, less, more, before) in counts {
+                            ui.horizontal(|ui| {
+                                dense_label(ui, label);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let n = if before {
+                                            s.onion.before
+                                        } else {
+                                            s.onion.after
+                                        };
+                                        if icons::button(
+                                            ui,
+                                            Icon::Plus,
+                                            false,
+                                            n < 9,
+                                            &keymap::tooltip(profile, more),
+                                        )
+                                        .clicked()
+                                        {
+                                            s.onion_step(before, 1);
+                                        }
+                                        dense_label(ui, n.to_string());
+                                        if icons::button(
+                                            ui,
+                                            Icon::Minus,
+                                            false,
+                                            n > 0,
+                                            &keymap::tooltip(profile, less),
+                                        )
+                                        .clicked()
+                                        {
+                                            s.onion_step(before, -1);
+                                        }
+                                    },
+                                );
+                            });
+                        }
+                        let mut percent = s.onion.opacity * 100.0;
+                        if symphony_ui::widgets::precise_slider(
+                            ui,
+                            egui::Slider::new(&mut percent, 5.0..=100.0)
+                                .step_by(1.0)
+                                .suffix("%")
+                                .text("Opacity"),
+                        )
+                        .changed()
+                        {
+                            s.onion.opacity = percent / 100.0;
+                        }
+                        ui.separator();
+                        if ui.button("Align onion skins").clicked() {
+                            s.begin_onion_alignment();
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(onion_shifted(s), egui::Button::new("Reset alignment"))
+                            .clicked()
+                        {
+                            s.onion.alignment = Default::default();
+                        }
+                        if drawing_only {
+                            ui.separator();
+                            ui.checkbox(&mut s.light_table, "Light table")
+                                .on_hover_text("Show the other layers' drawings faintly");
+                        }
+                    });
+                if let Some((original, mut side)) = s.onion.alignment_edit {
+                    let enter = !ui.ctx().text_edit_focused()
+                        && ui.input_mut(|input| {
+                            input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
                         });
-                    }
-                    let mut percent = s.onion.opacity * 100.0;
-                    if symphony_ui::widgets::precise_slider(
-                        ui,
-                        egui::Slider::new(&mut percent, 5.0..=100.0)
-                            .step_by(1.0)
-                            .suffix("%")
-                            .text("Opacity"),
-                    )
-                    .changed()
-                    {
-                        s.onion.opacity = percent / 100.0;
-                    }
+                    let escape = ui.input_mut(|input| {
+                        input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                    });
                     ui.separator();
-                    ui.collapsing("Align onion skins", |ui| onion_alignment(ui, s));
-                    ui.checkbox(&mut s.light_table, "Light table")
-                        .on_hover_text(
-                            "Show the other layers' drawings faintly behind the one you're drawing",
-                        );
-                    dense_label(ui, "Tints: Preferences, Canvas");
-                });
+                    ui.add_enabled_ui(s.onion.before > 0, |ui| {
+                        ui.selectable_value(&mut side, 0, "Previous")
+                    });
+                    ui.add_enabled_ui(s.onion.after > 0, |ui| {
+                        ui.selectable_value(&mut side, 1, "Next")
+                    });
+                    let done = ui
+                        .button("Done")
+                        .on_hover_text("Drag to move, Shift-drag to rotate. Enter to finish.");
+                    if escape {
+                        s.onion.alignment = original;
+                        s.onion.alignment_edit = None;
+                    } else if enter || done.clicked() {
+                        s.onion.alignment_edit = None;
+                    } else {
+                        s.onion.alignment_edit = Some((original, side));
+                    }
+                }
                 ui.add_space(10.0);
                 art_layer_toolbar(ui, s, profile);
                 s.guides.menu(ui);
@@ -1097,7 +1221,7 @@ pub fn ui(
         )
     });
     let middle = response.dragged_by(egui::PointerButton::Middle);
-    let navigating = space || middle || s.tool == Tool::Hand;
+    let navigating = space || middle || s.tool == Tool::Hand && s.onion.alignment_edit.is_none();
     if response.hovered() || response.dragged() {
         if let Some(p) = response.hover_pos() {
             if zoom_delta != 1.0 {
@@ -1187,6 +1311,9 @@ pub fn ui(
             .and_then(|layer| s.doc.camera_transform(layer.node, s.frame))
     };
     let layer_world = projected_layer.unwrap_or(Affine::IDENTITY);
+
+    let aligning = s.onion.alignment_edit.is_some();
+    edit_onion_skin(ui, &response, s, view.compose(layer_world), navigating);
 
     // Onion skin: neighbouring drawings of the selected layer, tinted.
     if s.onion.on && projected_layer.is_some() {
@@ -1510,7 +1637,8 @@ pub fn ui(
         super::rig_edit::draw_rest_guide(&painter, s, view);
     }
     state.select.camera_space = !drawing_only;
-    let navigating_now = navigating || response.drag_stopped_by(egui::PointerButton::Middle);
+    let navigating_now =
+        aligning || navigating || response.drag_stopped_by(egui::PointerButton::Middle);
     let tilt_busy = !navigating_now && tilt_controls(ui, rect, view.compose(layer_world), s);
     let warp_busy = !tilt_busy
         && !navigating_now
@@ -1939,7 +2067,7 @@ pub fn ui(
     } else {
         None
     };
-    if let Some(hint) = hint.filter(|_| drawing_only) {
+    if let Some(hint) = hint.filter(|_| drawing_only && !aligning) {
         painter.text(
             rect.left_top() + Vec2::new(10.0, 8.0),
             Align2::LEFT_TOP,
@@ -1951,21 +2079,34 @@ pub fn ui(
 
     s.guides.paint(&painter, view, w, h);
     let pen_eraser = samples.last().is_some_and(|l| l.tool == PenTool::Eraser);
-    draw_cursor(
-        ui,
-        &response,
-        rect,
-        s,
-        Mods {
-            space: space || middle,
-            shift,
-            alt,
-            pen_eraser,
-            locked,
-            hint: state.select.hover,
-            screen_per_size: size_unit(s, px) / px,
-        },
-    );
+    if aligning {
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+        }
+        painter.text(
+            rect.center_top() + Vec2::new(0.0, 8.0),
+            Align2::CENTER_TOP,
+            "Drag to move   Shift-drag to rotate   Enter to finish",
+            theme::dense(),
+            theme::TEXT_PRIMARY,
+        );
+    } else {
+        draw_cursor(
+            ui,
+            &response,
+            rect,
+            s,
+            Mods {
+                space: space || middle,
+                shift,
+                alt,
+                pen_eraser,
+                locked,
+                hint: state.select.hover,
+                screen_per_size: size_unit(s, px) / px,
+            },
+        );
+    }
     if !show_surround {
         camera_render::mask_outside_stage(&painter, rect, corners);
     } else if !drawing_only {

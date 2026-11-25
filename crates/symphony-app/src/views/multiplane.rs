@@ -319,7 +319,7 @@ fn orbit_stage(
         || response.dragged_by(egui::PointerButton::Secondary)
     {
         let delta = response.drag_delta();
-        orbit.yaw = (orbit.yaw + delta.x * 0.008).rem_euclid(std::f32::consts::TAU);
+        orbit.yaw = (orbit.yaw - delta.x * 0.008).rem_euclid(std::f32::consts::TAU);
         orbit.pitch = (orbit.pitch + delta.y * 0.008).clamp(-1.5, 1.5);
     }
     if response.hovered() {

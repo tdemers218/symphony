@@ -354,6 +354,7 @@ pub struct Onion {
     /// Opacity of the nearest onion drawing; farther ones fade from it.
     pub opacity: f32,
     pub alignment: [OnionAlignment; 2],
+    pub alignment_edit: Option<([OnionAlignment; 2], usize)>,
 }
 
 /// Strokes picked with the Select tool, in one drawing.
@@ -588,6 +589,7 @@ impl Session {
                 after: 1,
                 opacity: 0.45,
                 alignment: Default::default(),
+                alignment_edit: None,
             },
             guides: Default::default(),
             brush_size_cursor: true,
@@ -761,6 +763,12 @@ impl Session {
     }
 
     // ---- Undo ------------------------------------------------------------
+
+    pub fn begin_onion_alignment(&mut self) {
+        self.onion.on = true;
+        self.onion.alignment_edit =
+            Some((self.onion.alignment, usize::from(self.onion.before == 0)));
+    }
 
     pub fn undo(&mut self) {
         // The status bar says what was undone and how much history is left.
@@ -3601,11 +3609,30 @@ impl Session {
             }
             let was_selected = selection.contains(&stroke.id);
             selection.retain(|id| *id != stroke.id);
-            let after = outside
+            let pieces = symphony_vector::cut::split_path(stroke, &clip)
+                .filter(|pieces| {
+                    pieces.iter().filter(|(inside, _)| *inside).count() == inside.len()
+                        && pieces.iter().filter(|(inside, _)| !inside).count() == outside.len()
+                })
+                .unwrap_or_else(|| {
+                    outside
+                        .into_iter()
+                        .map(|shape| (false, shape))
+                        .chain(inside.into_iter().map(|shape| (true, shape)))
+                        .map(|(inside, shape)| {
+                            (
+                                inside,
+                                Stroke {
+                                    shape,
+                                    ..stroke.clone()
+                                },
+                            )
+                        })
+                        .collect()
+                });
+            let after = pieces
                 .into_iter()
-                .map(|shape| (false, shape))
-                .chain(inside.into_iter().map(|shape| (true, shape)))
-                .map(|(inside, shape)| {
+                .map(|(inside, mut piece)| {
                     let id = self.doc.ids.fresh();
                     if inside {
                         picked.push(id);
@@ -3613,11 +3640,8 @@ impl Session {
                     if was_selected && (!remove || !inside) {
                         selection.push(id);
                     }
-                    Stroke {
-                        id,
-                        shape,
-                        ..stroke.clone()
-                    }
+                    piece.id = id;
+                    piece
                 })
                 .collect();
             edits.push(Edit::ReplaceStroke {
@@ -3948,7 +3972,7 @@ mod tests {
         s.validate_selection();
         s.cut_area(
             id,
-            vec![[50.0, 0.0], [100.0, 0.0], [100.0, 100.0], [50.0, 100.0]],
+            vec![[50.0, 9.0], [70.0, 9.0], [70.0, 9.9], [50.0, 9.9]],
             false,
             false,
         );
@@ -3997,6 +4021,8 @@ mod tests {
         assert_eq!(s.doc.drawings[&id].strokes.len(), 2);
         assert_eq!(s.doc.drawings[&id].fills.len(), 2);
         assert_eq!(s.selected_strokes().len(), 1);
+        assert!(s.selected_strokes()[0].shape.is_empty());
+        assert!(s.selected_strokes()[0].points.len() > 1);
         assert!(s.selected_fills()[0].contains(65.0, 50.0));
         assert!(!s.selected_fills()[0].contains(35.0, 50.0));
         s.transform_selection(Affine::translate(4.0, 7.0), "Move selection");

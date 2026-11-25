@@ -235,7 +235,27 @@ pub fn ui(
         results.extend(
             hits.iter()
                 .take(limit)
+                .filter(|hit| !matches!(entries[hit.index].command, Command::UndoThrough(_)))
                 .map(|hit| entries[hit.index].clone()),
+        );
+    }
+    if st.query.trim().eq_ignore_ascii_case("undo") {
+        let mut index = results
+            .iter()
+            .position(|entry| entry.command == Command::Action(crate::keymap::Action::Undo))
+            .unwrap_or(0);
+        if index > 0 {
+            let undo = results.remove(index);
+            results.insert(0, undo);
+            index = 0;
+        }
+        let insert = (index + 1).min(results.len());
+        results.splice(
+            insert..insert,
+            entries
+                .iter()
+                .filter(|entry| matches!(entry.command, Command::UndoThrough(_)))
+                .cloned(),
         );
     }
     st.selected = st.selected.min(results.len().saturating_sub(1));

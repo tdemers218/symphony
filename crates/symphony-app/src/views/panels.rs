@@ -542,6 +542,45 @@ fn vector_version(p: &Preset) -> Preset {
     v
 }
 
+pub(crate) fn set_bitmap_brush(s: &mut Session, presets: &mut Presets, want: bool) {
+    if want == is_bitmap(&s.brush) {
+        return;
+    }
+    // Keep the same brush where it exists in the other kind: a
+    // bitmap brush's vector version, or back to the bitmap one.
+    let current = presets.current(PresetTool::Brush).map(str::to_owned);
+    let same = current.as_ref().and_then(|name| {
+        presets
+            .list(PresetTool::Brush)
+            .iter()
+            .find(|p| &p.name == name)
+            .cloned()
+    });
+    let pick = match (want, same) {
+        (false, Some(p)) => Some(vector_version(&p)),
+        (true, Some(p)) if is_bitmap(&p.settings) => Some(p),
+        _ => presets
+            .list(PresetTool::Brush)
+            .iter()
+            .find(|p| is_bitmap(&p.settings) == want)
+            .cloned()
+            .map(|p| if want { p } else { vector_version(&p) }),
+    };
+    match pick {
+        Some(p) => {
+            s.brush = p.settings;
+            presets.set_current(PresetTool::Brush, Some(p.name));
+        }
+        None => {
+            s.brush.texture = want.then(|| symphony_core::stroke::StrokeTexture {
+                spacing: 0.1,
+                ..Default::default()
+            });
+            presets.set_current(PresetTool::Brush, None);
+        }
+    }
+}
+
 fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pencil: bool) {
     let tool = if pencil {
         PresetTool::Pencil
@@ -560,35 +599,7 @@ fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pen
             false,
         );
         if want != bitmap {
-            // Keep the same brush where it exists in the other kind: a
-            // bitmap brush's vector version, or back to the bitmap one.
-            let current = presets.current(tool).map(str::to_owned);
-            let same = current
-                .as_ref()
-                .and_then(|name| presets.list(tool).iter().find(|p| &p.name == name).cloned());
-            let pick = match (want, same) {
-                (false, Some(p)) => Some(vector_version(&p)),
-                (true, Some(p)) if is_bitmap(&p.settings) => Some(p),
-                _ => presets
-                    .list(tool)
-                    .iter()
-                    .find(|p| is_bitmap(&p.settings) == want)
-                    .cloned()
-                    .map(|p| if want { p } else { vector_version(&p) }),
-            };
-            match pick {
-                Some(p) => {
-                    s.brush = p.settings;
-                    presets.set_current(tool, Some(p.name));
-                }
-                None => {
-                    s.brush.texture = want.then(|| symphony_core::stroke::StrokeTexture {
-                        spacing: 0.1,
-                        ..Default::default()
-                    });
-                    presets.set_current(tool, None);
-                }
-            }
+            set_bitmap_brush(s, presets, want);
         }
         ui.add_space(6.0);
     }
@@ -744,7 +755,7 @@ pub(super) fn rotation_3d(ui: &mut egui::Ui, s: &mut Session) {
     });
     hint(
         ui,
-        "Drag Tilt X or Tilt Y on the canvas. To move in depth, use 3D View.",
+        "Drag an axis ring on the canvas to rotate the peg. To move in depth, use 3D View.",
     );
 }
 
@@ -850,7 +861,7 @@ fn tool_properties_body(
                     widgets::checkbox(ui, &mut s.show_selected_points, "Show selected points");
                 }
 
-                if !select || !s.selection.strokes.is_empty() {
+                if !select {
                     rotation_3d(ui, s);
                 }
 

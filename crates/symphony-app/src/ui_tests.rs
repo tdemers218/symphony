@@ -2469,3 +2469,71 @@ fn smart_rig_drags_and_anchor_keys() {
     cycle_anchor(&mut s);
     assert_eq!(kind(&s), None);
 }
+
+#[test]
+fn tool_flyout_opens_on_hover_and_selects_a_mode() {
+    use egui_kittest::kittest::Queryable;
+    use symphony_ui::icons::{self, Icon};
+
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(520.0, 320.0))
+        .build_ui_state(
+            |ui, (anchor, selected): &mut (Pos2, Option<usize>)| {
+                let button = icons::tool_button(ui, Icon::Select, true, true, "Select tool");
+                *anchor = button.rect.center();
+                if let Some(choice) = crate::tool_flyout(
+                    ui,
+                    &button,
+                    &[
+                        (Icon::Select, "Selection", true),
+                        (Icon::Cutter, "Cutter", false),
+                    ],
+                ) {
+                    *selected = Some(choice);
+                }
+            },
+            (Pos2::ZERO, None),
+        );
+    harness.run_steps(2);
+    let at = harness.state().0;
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(at));
+    harness.run_steps(25);
+    harness.get_by_label("Cutter").click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().1, Some(1));
+}
+
+#[test]
+fn onion_alignment_moves_the_ghost_and_escape_restores_it() {
+    let mut harness = rig();
+    harness.state_mut().s.begin_onion_alignment();
+    harness.run_steps(2);
+    let start = harness.state().canvas.to_screen(0.0, 0.0);
+    let end = start + Vec2::new(40.0, 18.0);
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness
+        .input_mut()
+        .events
+        .extend([egui::Event::PointerMoved(start), button(start, true)]);
+    harness.step();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(end));
+    harness.step();
+    harness.input_mut().events.push(button(end, false));
+    harness.step();
+    assert!(harness.state().s.onion.alignment[0].offset[0] > 0.0);
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(2);
+    assert!(harness.state().s.onion.alignment_edit.is_none());
+    assert_eq!(harness.state().s.onion.alignment[0].offset, [0.0, 0.0]);
+}
