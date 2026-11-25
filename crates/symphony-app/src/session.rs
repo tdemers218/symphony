@@ -2202,6 +2202,35 @@ impl Session {
         }
     }
 
+    /// Move the pivot while compensating the peg's translation at this frame.
+    pub fn relocate_peg_pivot(&mut self, layer: usize, pivot: (f32, f32)) {
+        let Some(id) = self.transform_peg_id(layer) else {
+            return;
+        };
+        let Some(mut peg) = self.transform_peg(layer).cloned() else {
+            return;
+        };
+        if peg.pivot == pivot {
+            return;
+        }
+        let before = peg.transform_at(self.frame);
+        peg.pivot = pivot;
+        let after = peg.transform_at(self.frame);
+        for (value, correction) in [
+            (&mut peg.x, before.tx - after.tx),
+            (&mut peg.y, before.ty - after.ty),
+        ] {
+            if correction.abs() > 1e-5 {
+                let corrected = value.at(self.frame) + correction;
+                match value {
+                    Value::Constant(current) if !self.animate => *current = corrected,
+                    _ => value.set_key(self.frame, corrected),
+                }
+            }
+        }
+        self.set_peg_by_id(id, peg);
+    }
+
     // ---- Timing ----------------------------------------------------------
 
     /// Hold the current drawing one frame longer (+1) or shorter (-1),
@@ -4806,6 +4835,24 @@ mod tests {
         s.close_gap(0, 1, &rough, 40.0);
         s.paint_at(0, 1, 50.0, 50.0, 1.0);
         assert_eq!(fills(&s).len(), 1, "after Close Gap it can");
+    }
+
+    #[test]
+    fn moving_a_tilted_peg_pivot_preserves_artwork_and_undoes() {
+        let mut s = Session::new_scene();
+        s.adjust_peg(0, |peg| peg.rotation = 32.0);
+        s.set_selected_peg_tilt(true, [24.0, -43.0]);
+        s.end_gesture();
+        let before = s.transform_peg(0).unwrap().clone();
+        s.relocate_peg_pivot(0, (12.0, 23.0));
+        s.end_gesture();
+        let after = s.transform_peg(0).unwrap();
+        assert_eq!(after.pivot, (12.0, 23.0));
+        let a = before.transform_at(s.frame).apply(8.0, -15.0);
+        let b = after.transform_at(s.frame).apply(8.0, -15.0);
+        assert!((a.0 - b.0).hypot(a.1 - b.1) < 1e-4);
+        s.undo();
+        assert_eq!(s.transform_peg(0), Some(&before));
     }
 
     #[test]

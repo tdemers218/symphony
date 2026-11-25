@@ -1475,8 +1475,7 @@ pub fn ui(
     // peg orientation that Camera uses without applying camera framing.
     let drawing_peg = (drawing_only && s.tool == Tool::Transform)
         .then(|| s.transform_peg(s.selected))
-        .flatten()
-        .filter(|peg| peg.tilt_enabled);
+        .flatten();
     let projected_layer = if drawing_only {
         Some(drawing_peg.map_or(Affine::IDENTITY, |peg| peg.transform_at(s.frame)))
     } else {
@@ -1485,11 +1484,13 @@ pub fn ui(
             .get(s.selected)
             .and_then(|layer| s.doc.camera_transform(layer.node, s.frame))
     };
-    let drawing_front = drawing_peg.filter(|peg| peg.face_camera).map(|peg| {
-        let mut front = peg.clone();
-        front.tilt_enabled = false;
-        front.transform_at(s.frame)
-    });
+    let drawing_front = drawing_peg
+        .filter(|peg| peg.tilt_enabled && peg.face_camera)
+        .map(|peg| {
+            let mut front = peg.clone();
+            front.tilt_enabled = false;
+            front.transform_at(s.frame)
+        });
     let layer_world = projected_layer.unwrap_or(Affine::IDENTITY);
 
     edit_onion_skin(ui, &response, s, view.compose(layer_world), navigating);

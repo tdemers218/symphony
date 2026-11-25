@@ -71,6 +71,7 @@ fn outline(anchors: &[Anchor], closed: bool) -> Vec<Pos2> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
     Move,
+    Pivot,
     Scale(usize),
     Rotate,
 }
@@ -85,8 +86,10 @@ struct Drag {
     start: Pos2,
     /// Drawing -> scene at drag start (Transform tool).
     world: Affine,
+    camera_space: bool,
     /// Peg values at drag start (Transform tool).
     peg: Option<PegValues>,
+    pivot: Option<(f32, f32)>,
 }
 
 #[derive(Default)]
@@ -167,9 +170,11 @@ fn drag_transform(d: &Drag, now: Pos2, uniform: bool) -> Option<Affine> {
     let (nx, ny) = inv.apply(now.x, now.y);
     let c = corners(d.lo, d.hi);
     Some(match d.kind {
-        Kind::Move => Affine::translate(nx - sx, ny - sy),
+        Kind::Move | Kind::Pivot => Affine::translate(nx - sx, ny - sy),
         Kind::Rotate => {
-            let (cx, cy) = ((d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0);
+            let (cx, cy) = d
+                .pivot
+                .unwrap_or(((d.lo[0] + d.hi[0]) / 2.0, (d.lo[1] + d.hi[1]) / 2.0));
             let a = (sy - cy).atan2(sx - cx);
             let b = (ny - cy).atan2(nx - cx);
             Affine::translate(cx, cy)
@@ -272,12 +277,21 @@ pub fn ui(
             .map(|(lo, hi)| (lo, hi, view.compose(world)))
     };
 
+    let pivot_at = target.and_then(|(_, _, m)| {
+        let peg = transform_tool
+            .then(|| s.transform_peg(s.selected))
+            .flatten()?;
+        Some(pos(m.apply(peg.pivot.0, peg.pivot.1)))
+    });
+    let on_pivot = |p: Pos2| pivot_at.is_some_and(|pivot| pivot.distance(p) <= 9.0);
+
     st.hover = match (&st.drag, target, pointer) {
         (Some(d), _, _) => Some(if d.kind == Kind::Rotate {
             Icon::RotateRight
         } else {
             Icon::Transform
         }),
+        (None, _, Some(p)) if on_pivot(p) => Some(Icon::Transform),
         (None, Some((lo, hi, m)), Some(p)) => match grab(p, lo, hi, m) {
             Some(Kind::Rotate) => Some(Icon::RotateRight),
             Some(Kind::Scale(_)) => Some(Icon::Transform),
@@ -309,7 +323,14 @@ pub fn ui(
     // Start a gesture.
     if response.drag_started_by(egui::PointerButton::Primary) {
         if let Some(p) = view_pointer.or(response.interact_pointer_pos()) {
-            let on_box = target.and_then(|(lo, hi, m)| grab(p, lo, hi, m).map(|k| (k, lo, hi, m)));
+            let on_box = target.and_then(|(lo, hi, m)| {
+                let kind = if on_pivot(p) {
+                    Some(if alt { Kind::Pivot } else { Kind::Move })
+                } else {
+                    grab(p, lo, hi, m)
+                };
+                kind.map(|kind| (kind, lo, hi, m))
+            });
             let start_drag =
                 |kind: Kind, lo: [f32; 2], hi: [f32; 2], m: Affine, s: &mut Session| {
                     let peg = if transform_tool {
@@ -317,7 +338,7 @@ pub fn ui(
                     } else {
                         None
                     };
-                    if transform_tool && kind != Kind::Move {
+                    if transform_tool && matches!(kind, Kind::Rotate | Kind::Scale(_)) {
                         let (cx, cy) = ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0);
                         s.ensure_pivot(s.selected, (cx, cy));
                     }
@@ -337,7 +358,12 @@ pub fn ui(
                         to_screen: m,
                         start: p,
                         world,
+                        camera_space,
                         peg,
+                        pivot: transform_tool
+                            .then(|| s.transform_peg(s.selected))
+                            .flatten()
+                            .map(|peg| peg.pivot),
                     }
                 };
             if !st.polygon.is_empty() {
@@ -346,6 +372,7 @@ pub fn ui(
                 !cutter
                     && (transform_tool || !shift && !ctrl)
                     && (*k != Kind::Move
+                        || on_pivot(p)
                         || s.easy_drag
                         || hit_selection(s, p, view, items, transform_tool))
             }) {
@@ -410,7 +437,7 @@ pub fn ui(
                 s.end_gesture();
             } else if let Some(l) = drag_transform(&d, p, shift) {
                 let name = match d.kind {
-                    Kind::Move => "Move selection",
+                    Kind::Move | Kind::Pivot => "Move selection",
                     Kind::Rotate => "Rotate selection",
                     Kind::Scale(_) => "Scale selection",
                 };
@@ -600,8 +627,14 @@ pub fn ui(
                     .find(|(l, _, _)| *l == s.selected)
                     .map(|(_, _, w)| *w)
                     .unwrap_or(Affine::IDENTITY);
-                let c = view.compose(world).apply(p.pivot.0, p.pivot.1);
-                painter.circle_stroke(pos(c), 5.0, EStroke::new(2.0, theme::ACCENT_TIME));
+                let c = pos(view.compose(world).apply(p.pivot.0, p.pivot.1));
+                let c = if let Some(drag) = st.drag.as_ref().filter(|drag| drag.kind == Kind::Pivot)
+                {
+                    pos(drag.to_screen.apply(p.pivot.0, p.pivot.1))
+                } else {
+                    c
+                };
+                painter.circle_stroke(c, 5.0, EStroke::new(2.0, theme::ACCENT_TIME));
             }
         }
     }
@@ -639,6 +672,9 @@ fn current_peg(s: &Session) -> PegValues {
 fn apply_peg_drag(s: &mut Session, d: &Drag, l: Affine) {
     let Some(start) = d.peg else { return };
     let layer = s.selected;
+    if s.doc.column(layer).is_some_and(|column| column.locked) {
+        return;
+    }
     match d.kind {
         Kind::Move => {
             // A drawing-local offset, carried into scene space by the
@@ -649,8 +685,10 @@ fn apply_peg_drag(s: &mut Session, d: &Drag, l: Affine) {
                 ..d.world
             };
             let (dx, dy) = linear.apply(l.tx, l.ty);
-            let (dx, dy) = s
-                .transform_peg_id(layer)
+            let (dx, dy) = d
+                .camera_space
+                .then(|| s.transform_peg_id(layer))
+                .flatten()
                 .and_then(|id| s.doc.graph.world_transform(id, s.frame).ok())
                 .and_then(|parent| {
                     Affine {
@@ -665,6 +703,11 @@ fn apply_peg_drag(s: &mut Session, d: &Drag, l: Affine) {
                 v.x = start.x + dx;
                 v.y = start.y + dy;
             });
+        }
+        Kind::Pivot => {
+            if let Some((x, y)) = d.pivot {
+                s.relocate_peg_pivot(layer, (x + l.tx, y + l.ty));
+            }
         }
         Kind::Rotate => {
             let deg = l.b.atan2(l.a).to_degrees();
