@@ -309,45 +309,62 @@ fn fit_zoom(rect: Rect, w: f32, h: f32) -> f32 {
         .clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
-/// Scene units -> screen points for this canvas rect. The zoom is
-/// absolute: the rect only places the centre.
-fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, transform: Affine, s: &mut Session) -> bool {
-    if s.tool != Tool::Transform || canvas.width() < 180.0 || canvas.height() < 118.0 {
-        return false;
+/// Fixed viewport control for the selected drawing peg.
+fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec<egui::Shape>) {
+    use egui::Shape;
+    if s.tool != Tool::Transform || canvas.width() < 114.0 || canvas.height() < 114.0 {
+        return (false, Vec::new());
     }
     let Some(peg) = s.transform_peg(s.selected).filter(|peg| peg.tilt_enabled) else {
-        return false;
+        return (false, Vec::new());
     };
     let mut angles = peg
         .tilt
         .as_ref()
         .map_or([0.0; 2], |tilt| [tilt[0].at(s.frame), tilt[1].at(s.frame)]);
     let roll = peg.rotation.at(s.frame);
-    let pivot = to_pos(transform.apply(peg.pivot.0, peg.pivot.1));
-    let centre = Pos2::new(
-        (pivot.x + 75.0).clamp(canvas.left() + 51.0, canvas.right() - 51.0),
-        (pivot.y - 38.0).clamp(canvas.top() + 51.0, canvas.bottom() - 51.0),
-    );
-    let rect = Rect::from_center_size(centre, Vec2::splat(98.0));
+    let centre = canvas.right_bottom() - Vec2::splat(57.0);
+    let rect = Rect::from_center_size(centre, Vec2::splat(94.0));
     let response = ui.interact(rect, ui.scope_id().with("peg-orientation"), Sense::drag());
     let drag_id = response.id.with("axis");
-    let rings = [(27.0, 11.0, -0.68), (27.0, 11.0, 0.68), (31.0, 31.0, 0.0)];
-    let point_on = |(a, b, rotation): (f32, f32, f32), t: f32| {
-        centre + egui::emath::Rot2::from_angle(rotation) * egui::vec2(a * t.cos(), b * t.sin())
+
+    let rotate = |[x, y, z]: [f32; 3], pitch: f32, yaw: f32| {
+        let (sx, cx) = pitch.to_radians().sin_cos();
+        let (sy, cy) = yaw.to_radians().sin_cos();
+        let depth = y * sx + z * cx;
+        [x * cy + depth * sy, y * cx - z * sx, depth * cy - x * sy]
     };
-    let paths = rings.map(|ring| {
-        (0..=48)
-            .map(|i| point_on(ring, i as f32 * std::f32::consts::TAU / 48.0))
-            .collect::<Vec<_>>()
+    let view = |point| rotate(point, 24.0, -32.0);
+    let rings = std::array::from_fn::<_, 3, _>(|axis| {
+        let on_plane = |a, b| match axis {
+            0 => [0.0, a, b],
+            1 => [a, 0.0, b],
+            _ => [a, b, 0.0],
+        };
+        let [ax, ay, az] = view(on_plane(35.0, 0.0));
+        let [bx, by, bz] = view(on_plane(0.0, 35.0));
+        // Start edge-on so each half is one continuous arc. The first
+        // half goes towards the viewer and is drawn above the cube.
+        let phase = bz.atan2(az) + std::f32::consts::FRAC_PI_2;
+        [0, 1].map(|half| {
+            (0..=32)
+                .map(|i| {
+                    let t = phase + (half * 32 + i) as f32 * std::f32::consts::PI / 32.0;
+                    let (sin, cos) = t.sin_cos();
+                    centre + Vec2::new(ax * cos + bx * sin, ay * cos + by * sin)
+                })
+                .collect::<Vec<_>>()
+        })
     });
     let nearest = |p: Pos2| {
-        paths
+        rings
             .iter()
             .enumerate()
-            .map(|(axis, path)| {
+            .map(|(axis, arcs)| {
                 (
                     axis,
-                    path.iter()
+                    arcs.iter()
+                        .flatten()
                         .map(|q| p.distance_sq(*q))
                         .fold(f32::INFINITY, f32::min),
                 )
@@ -368,42 +385,63 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, transform: Affine, s: &mut Ses
         .data(|data| data.get_temp::<Option<usize>>(drag_id))
         .flatten();
     let colours = [
-        egui::Color32::from_rgb(230, 132, 133),
-        egui::Color32::from_rgb(132, 198, 158),
-        egui::Color32::from_rgb(129, 168, 228),
+        egui::Color32::from_rgb(235, 113, 117),
+        egui::Color32::from_rgb(151, 206, 114),
+        egui::Color32::from_rgb(111, 164, 240),
     ];
-    let painter = ui.painter().with_clip_rect(canvas);
-    painter.circle_filled(centre, 39.0, theme::GLASS_FLOATING);
-    for (axis, path) in paths.into_iter().enumerate() {
-        let highlighted = active.or(hover) == Some(axis);
-        painter.add(egui::Shape::line(
-            path,
-            EStroke::new(if highlighted { 2.4 } else { 1.3 }, colours[axis]),
+    let ring_shapes = |front: bool| {
+        rings.iter().enumerate().map(move |(axis, ring)| {
+            let highlighted = active.or(hover) == Some(axis);
+            let colour =
+                colours[axis].gamma_multiply(if front || highlighted { 1.0 } else { 0.35 });
+            Shape::line(
+                ring[usize::from(!front)].clone(),
+                EStroke::new(if highlighted { 2.7 } else { 1.7 }, colour),
+            )
+        })
+    };
+
+    let mut shapes = vec![
+        Shape::circle_filled(centre, 44.0, theme::GLASS_FLOATING.gamma_multiply(0.86)),
+        Shape::circle_stroke(
+            centre,
+            44.0,
+            EStroke::new(1.0, theme::TEXT_PRIMARY.gamma_multiply(0.56)),
+        ),
+    ];
+    shapes.extend(ring_shapes(false));
+    let cube = std::array::from_fn::<_, 8, _>(|i| {
+        let point = [1, 2, 4].map(|bit| if i & bit == 0 { -16.0 } else { 16.0 });
+        let [x, y, z] = rotate(point, angles[0], angles[1]);
+        let rolled = egui::emath::Rot2::from_angle(roll.to_radians()) * Vec2::new(x, y);
+        let [x, y, z] = view([rolled.x, rolled.y, z]);
+        (centre + Vec2::new(x, y), z)
+    });
+    let mut faces = [
+        ([0, 1, 3, 2], 110),
+        ([4, 6, 7, 5], 110),
+        ([0, 4, 5, 1], 153),
+        ([2, 3, 7, 6], 153),
+        ([0, 2, 6, 4], 83),
+        ([1, 5, 7, 3], 83),
+    ];
+    let depth = |face: [usize; 4]| face.iter().map(|&index| cube[index].1).sum::<f32>();
+    faces.sort_by(|a, b| depth(b.0).total_cmp(&depth(a.0)));
+    for (face, shade) in faces {
+        let mut points = face.map(|i| cube[i].0);
+        let a = points[1] - points[0];
+        let b = points[2] - points[0];
+        if a.x * b.y < a.y * b.x {
+            points.reverse();
+        }
+        shapes.push(Shape::convex_polygon(
+            points.to_vec(),
+            egui::Color32::from_gray(shade),
+            EStroke::new(0.9, theme::ACCENT_SELECT.gamma_multiply(0.82)),
         ));
     }
-    let cube = (0..8)
-        .map(|i| {
-            let x = if i & 1 != 0 { 9.0 } else { -9.0 };
-            let y = if i & 2 != 0 { 9.0 } else { -9.0 };
-            let z = if i & 4 != 0 { 9.0 } else { -9.0 };
-            let (sx, cx) = (angles[0] + 23.0).to_radians().sin_cos();
-            let (sy, cy) = (angles[1] - 28.0).to_radians().sin_cos();
-            let yz = y * sx + z * cx;
-            centre
-                + egui::emath::Rot2::from_angle(roll.to_radians())
-                    * egui::vec2(x * cy + yz * sy, y * cx - z * sx)
-        })
-        .collect::<Vec<_>>();
-    for i in 0..8 {
-        for bit in [1, 2, 4] {
-            if i & bit == 0 {
-                painter.line_segment(
-                    [cube[i], cube[i | bit]],
-                    EStroke::new(1.15, theme::TEXT_PRIMARY),
-                );
-            }
-        }
-    }
+    shapes.extend(ring_shapes(true));
+    shapes.push(Shape::circle_filled(centre, 2.0, theme::ACCENT_SELECT));
     let locked = s.doc.column(s.selected).is_some_and(|column| column.locked);
     if let Some(axis) =
         active.filter(|_| !locked && response.dragged_by(egui::PointerButton::Primary))
@@ -437,9 +475,10 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, transform: Affine, s: &mut Ses
         Some(_) => "Rotate the peg around Z",
         None => "Drag an axis ring to rotate the peg",
     });
-    busy
+    (busy, shapes)
 }
 
+/// Scene units to screen points. The canvas rect places the centre.
 fn view_transform(state: &CanvasState, rect: Rect) -> Affine {
     let c = rect.center() + state.pan;
     let scale = state.zoom * state.framing;
@@ -1639,7 +1678,11 @@ pub fn ui(
     state.select.camera_space = !drawing_only;
     let navigating_now =
         aligning || navigating || response.drag_stopped_by(egui::PointerButton::Middle);
-    let tilt_busy = !navigating_now && tilt_controls(ui, rect, view.compose(layer_world), s);
+    let (tilt_busy, tilt_overlay) = if navigating_now {
+        (false, Vec::new())
+    } else {
+        tilt_controls(ui, rect, s)
+    };
     let warp_busy = !tilt_busy
         && !navigating_now
         && super::warp_edit::ui(ui, &response, &painter, s, &mut state.warp_edit, view);
@@ -2115,6 +2158,7 @@ pub fn ui(
             EStroke::new(1.0, theme::LINE_CONTROL),
         ));
     }
+    painter.extend(tilt_overlay);
     bottom_toolbar(ui, state, profile);
 }
 
