@@ -31,6 +31,8 @@ pub struct PegParams {
     pub tilt: Option<Box<[Value; 2]>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tilt_enabled: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub face_camera: bool,
     pub scale_x: Option<Value>,
     pub scale_y: Option<Value>,
     pub pivot: (f32, f32),
@@ -429,6 +431,8 @@ pub struct StagePose {
     pub transform: Affine,
     pub depth: f32,
     rows: [[f32; 4]; 3],
+    front: Option<Affine>,
+    camera_facing: bool,
 }
 
 impl StagePose {
@@ -438,6 +442,8 @@ impl StagePose {
             transform: Affine { a, b, c, d, tx, ty },
             depth,
             rows,
+            front: None,
+            camera_facing: false,
         }
     }
 
@@ -454,6 +460,14 @@ impl StagePose {
                 }
             })
         }))
+    }
+
+    fn artwork_plane(self) -> Option<Affine> {
+        if !self.camera_facing {
+            return None;
+        }
+        let [[a, c, _, tx], [b, d, _, ty], _] = self.rows;
+        Some(Affine { a, b, c, d, tx, ty })
     }
 
     pub fn point_at(self, x: f32, y: f32) -> [f32; 3] {
@@ -480,6 +494,8 @@ pub struct RenderItem {
     /// The pegs' transform (Mesh Warps count as no change here: tools
     /// work on the drawing as drawn).
     pub transform: Affine,
+    /// Physical plane for imported images when vector artwork faces Camera.
+    pub image_transform: Option<Affine>,
     pub depth: f32,
     pub matte_pass: bool,
     /// Mesh Warps above the drawing that bend it, if any.
@@ -838,6 +854,7 @@ impl Graph {
                         column: *column,
                         drawing,
                         transform: pose.transform,
+                        image_transform: pose.artwork_plane(),
                         depth: pose.depth,
                         matte_pass,
                         warp,
@@ -1366,7 +1383,26 @@ impl Graph {
                     .sample_key(id, frame)
                     .map_or(node.enabled, |key| key.enabled) =>
             {
-                parent.compose(p.stage_transform(frame))
+                let local = p.stage_transform(frame);
+                let mut pose = parent.compose(local);
+                if parent.front.is_some() || p.tilt_enabled {
+                    let front = parent
+                        .front
+                        .unwrap_or(parent.transform)
+                        .compose(p.flat_transform_at(frame));
+                    pose.front = Some(front);
+                    if p.tilt_enabled && p.face_camera {
+                        let (x, y) = p.pivot;
+                        let [px, py, _] = pose.point_at(x, y);
+                        let (fx, fy) = front.apply(x, y);
+                        pose.transform = Affine::translate(px - fx, py - fy).compose(front);
+                        pose.camera_facing = true;
+                    } else if parent.camera_facing {
+                        pose.transform = parent.transform.compose(local.transform);
+                        pose.camera_facing = true;
+                    }
+                }
+                pose
             }
             _ => parent,
         })
@@ -1377,6 +1413,30 @@ impl Graph {
 mod tests {
     use super::*;
     use crate::xsheet::Column;
+
+    #[test]
+    fn face_camera_preserves_ink_orientation_without_flattening_the_stage_plane() {
+        let mut graph = Graph::default();
+        let id = graph.add(
+            "Tilt",
+            NodeKind::Peg(PegParams {
+                tilt_enabled: true,
+                face_camera: true,
+                tilt: Some(Box::new([Value::Constant(0.0), Value::Constant(90.0)])),
+                pivot: (10.0, 0.0),
+                ..Default::default()
+            }),
+        );
+        let child = graph.add("Child peg", NodeKind::Peg(PegParams::default()));
+        let drawing = graph.add("Drawing", NodeKind::Drawing { column: Id(1) });
+        graph.connect(id, child, 0);
+        graph.connect(child, drawing, 0);
+        let pose = graph.world_pose(drawing, 1).unwrap();
+        assert_eq!(pose.transform.apply(20.0, 0.0), (20.0, 0.0));
+        let [x, _, z] = pose.point_at(20.0, 0.0);
+        assert!((x - 10.0).abs() < 1e-4 && (z + 10.0).abs() < 1e-4);
+        assert!(pose.artwork_plane().unwrap().a.abs() < 1e-4);
+    }
 
     #[test]
     fn tilted_peg_has_spatial_depth_and_retains_its_pivot() {

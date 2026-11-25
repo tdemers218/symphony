@@ -115,6 +115,7 @@ pub fn render_drawing_thumbnails(
             column,
             drawing,
             transform: Affine::IDENTITY,
+            image_transform: None,
             depth: 0.0,
             matte_pass: false,
             warp: None,
@@ -339,6 +340,7 @@ fn paint_drawing(
             .warp
             .as_deref()
             .and_then(|warp| warp.raster_transform())
+            .or(item.image_transform)
             .map_or(m, |raster| view.compose(project).compose(raster));
         paint_image(pix, scene, img, transform);
     }

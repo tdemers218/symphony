@@ -2109,6 +2109,26 @@ impl Session {
         self.set_peg_by_id(id, peg);
     }
 
+    pub fn set_selected_peg_face_camera(&mut self, enabled: bool) {
+        if self
+            .doc
+            .column(self.selected)
+            .is_some_and(|column| column.locked)
+        {
+            return;
+        }
+        let Some(id) = self.transform_peg_id(self.selected) else {
+            return;
+        };
+        let Some(mut peg) = self.transform_peg(self.selected).cloned() else {
+            return;
+        };
+        peg.face_camera = enabled;
+        self.end_gesture();
+        self.set_peg_by_id(id, peg);
+        self.end_gesture();
+    }
+
     // ---- Transform tool (layers, through their pegs) ----------------------
 
     /// Change the selected layer's peg in one gesture step. In Animate mode
@@ -3784,6 +3804,31 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_facing_strokes_render_when_the_plane_is_edge_on() {
+        for texture in [None, Some(symphony_core::stroke::StrokeTexture::default())] {
+            let mut s = Session::new_scene();
+            s.doc.settings.width = 240;
+            s.doc.settings.height = 240;
+            square_drawing(&mut s);
+            let drawing = s.doc.exposed(0, 1).unwrap();
+            let stroke = &mut s.doc.drawings.get_mut(&drawing).unwrap().strokes[0];
+            stroke.texture = texture;
+            stroke.max_width = 8.0;
+            s.set_selected_peg_tilt(true, [0.0, 90.0]);
+            s.end_gesture();
+            let edge_on = symphony_render::render_frame(&s.doc, 1, 240, 240).unwrap();
+            s.set_selected_peg_face_camera(true);
+            let facing = symphony_render::render_frame(&s.doc, 1, 240, 240).unwrap();
+            assert_ne!(edge_on, facing);
+            s.undo();
+            assert_eq!(
+                symphony_render::render_frame(&s.doc, 1, 240, 240).unwrap(),
+                edge_on
+            );
+        }
+    }
 
     #[test]
     fn bookmarks_follow_scene_frame_insertions_and_undo() {

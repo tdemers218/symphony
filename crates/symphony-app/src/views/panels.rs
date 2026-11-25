@@ -706,6 +706,7 @@ pub(super) fn rotation_3d(ui: &mut egui::Ui, s: &mut Session) {
         return;
     };
     let mut enabled = peg.tilt_enabled;
+    let mut face_camera = peg.face_camera;
     let mut angles = peg
         .tilt
         .as_ref()
@@ -717,6 +718,12 @@ pub(super) fn rotation_3d(ui: &mut egui::Ui, s: &mut Session) {
             s.end_gesture();
         }
         if enabled {
+            if widgets::checkbox(ui, &mut face_camera, "Face Camera")
+                .on_hover_text("Keep vector strokes and fills front-facing as the plane tilts.")
+                .changed()
+            {
+                s.set_selected_peg_face_camera(face_camera);
+            }
             ui.horizontal_wrapped(|ui| {
                 for (axis, label) in ["X ", "Y "].into_iter().enumerate() {
                     let response = ui.add(

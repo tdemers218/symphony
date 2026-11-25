@@ -1228,6 +1228,7 @@ pub fn ui(
     // Drawings bent by Mesh Warps: (drawing, its warp).
     // (drawing, its warp, projection for both vector and raster artwork)
     let mut warps: Vec<(Id, std::sync::Arc<symphony_core::warp::Warp>, Affine)> = Vec::new();
+    let mut image_planes = Vec::new();
     let items: Vec<select::Item> = if drawing_only {
         s.doc
             .exposed(s.selected, s.frame)
@@ -1247,6 +1248,9 @@ pub fn ui(
                 let layer = s.doc.layers.iter().position(|l| l.node == item.node)?;
                 let plane = s.doc.project_plane(s.frame, item.depth)?;
                 let transform = plane.compose(item.transform);
+                if let Some(image) = item.image_transform {
+                    image_planes.push((layer, plane.compose(image)));
+                }
                 if let Some(w) = &item.warp {
                     warps.push((item.drawing, w.clone(), plane));
                 }
@@ -1269,7 +1273,7 @@ pub fn ui(
         state
             .bent
             .retain(|d, _| warps.iter().any(|(w, _, _)| w == d));
-        for (_, d, m) in &items {
+        for (layer, d, m) in &items {
             let Some(original) = s.doc.drawings.get(d) else {
                 continue;
             };
@@ -1280,6 +1284,12 @@ pub fn ui(
                     .find(|(w, _, _)| w == d)
                     .and_then(|(_, warp, stage)| {
                         Some(view.compose(*stage).compose(warp.raster_transform()?))
+                    })
+                    .or_else(|| {
+                        image_planes
+                            .iter()
+                            .find(|(i, _)| i == layer)
+                            .map(|(_, m)| view.compose(*m))
                     })
                     .unwrap_or(world);
                 state
