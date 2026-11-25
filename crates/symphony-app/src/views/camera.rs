@@ -389,42 +389,63 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
             .map(|(axis, _)| axis)
     };
     let hover = ui.ctx().pointer_hover_pos().and_then(nearest);
-    if response.drag_started_by(egui::PointerButton::Primary) {
-        let axis = ui
-            .input(|input| input.pointer.press_origin())
-            .and_then(nearest);
-        ui.data_mut(|data| data.insert_temp(drag_id, axis));
+    // Freeze the screen direction and starting orientation at the grab.
+    // Re-inverting the projected ellipse as the mouse crosses its centre
+    // or an edge-on ring can turn a few pixels into a half-turn.
+    #[derive(Clone, Copy)]
+    struct RingDrag {
+        axis: usize,
+        origin: Pos2,
+        direction: Vec2,
+        angles: [f32; 2],
+        roll: f32,
     }
-    let active = ui
-        .data(|data| data.get_temp::<Option<usize>>(drag_id))
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        let drag = ui
+            .input(|input| input.pointer.press_origin())
+            .and_then(|origin| {
+                let axis = nearest(origin)?;
+                let ring = &rings[axis];
+                let samples: Vec<_> = ring
+                    .iter()
+                    .flat_map(|arc| arc.iter().take(32))
+                    .copied()
+                    .collect();
+                let (index, _) = samples.iter().enumerate().min_by(|(_, a), (_, b)| {
+                    origin.distance_sq(**a).total_cmp(&origin.distance_sq(**b))
+                })?;
+                let tangent = samples[(index + 1) % 64] - samples[(index + 63) % 64];
+                let [[ax, ay, _], [bx, by, _]] = bases[axis];
+                let a = Vec2::new(ax, ay);
+                let b = Vec2::new(bx, by);
+                let fallback = if a.length_sq() > b.length_sq() { -a } else { b };
+                let direction = if tangent.length() > 0.75 {
+                    tangent
+                } else {
+                    fallback
+                };
+                Some(RingDrag {
+                    axis,
+                    origin,
+                    direction: direction.normalized(),
+                    angles,
+                    roll,
+                })
+            });
+        ui.data_mut(|data| data.insert_temp(drag_id, drag));
+    }
+    let drag = ui
+        .data(|data| data.get_temp::<Option<RingDrag>>(drag_id))
         .flatten();
+    let active = drag.map(|drag| drag.axis);
     let locked = s.doc.column(s.selected).is_some_and(|column| column.locked);
-    if let Some((axis, pointer)) = active
+    if let Some((drag, pointer)) = drag
         .filter(|_| !locked && response.dragged_by(egui::PointerButton::Primary))
         .zip(response.interact_pointer_pos())
     {
-        let delta = response.drag_delta();
-        let [[ax, ay, _], [bx, by, _]] = bases[axis];
-        let area = ax * by - ay * bx;
-        let rotation = if area.abs() > 175.0 {
-            let on_ring = |p: Pos2| {
-                let p = p - centre;
-                Vec2::new((by * p.x - bx * p.y) / area, (ax * p.y - ay * p.x) / area)
-            };
-            let previous = on_ring(pointer - delta);
-            let current = on_ring(pointer);
-            (previous.x * current.y - previous.y * current.x)
-                .atan2(previous.dot(current))
-                .to_degrees()
-        } else {
-            // Near edge-on the inverse ellipse is unstable. Use signed
-            // motion along its longest visible direction.
-            let a = Vec2::new(ax, ay);
-            let b = Vec2::new(bx, by);
-            let tangent = if a.length_sq() > b.length_sq() { -a } else { b };
-            (delta.dot(tangent.normalized()) / radius).to_degrees()
-        };
-        if rotation != 0.0 {
+        let axis = drag.axis;
+        let rotation = ((pointer - drag.origin).dot(drag.direction) / 35.0).to_degrees();
+        {
             let (sin, cos) = rotation.to_radians().sin_cos();
             let columns = std::array::from_fn::<_, 3, _>(|column| {
                 let mut p = [0.0; 3];
@@ -440,7 +461,7 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
                         p[next] = -sin;
                     }
                 }
-                orient(p, angles, roll)
+                orient(p, drag.angles, drag.roll)
             });
             let [x, y, z] = columns;
             let pitch = (-z[1]).atan2(z[0].hypot(z[2])).to_degrees();
@@ -551,7 +572,7 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
     shapes.push(Shape::circle_filled(centre, 2.0, theme::ACCENT_SELECT));
     let busy = response.contains_pointer() || response.dragged() || response.drag_stopped();
     if response.drag_stopped() {
-        ui.data_mut(|data| data.remove::<Option<usize>>(drag_id));
+        ui.data_mut(|data| data.remove::<Option<RingDrag>>(drag_id));
         if active.is_some() {
             s.end_gesture();
         }
