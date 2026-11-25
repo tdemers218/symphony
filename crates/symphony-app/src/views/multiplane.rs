@@ -1,4 +1,4 @@
-//! A side view of camera-facing drawing planes, with depth staging controls.
+//! An orbitable stage and a side diagram for editing drawing-plane depth.
 
 use eframe::egui::{self, Align2, Pos2, Sense, Stroke, Vec2};
 use symphony_core::anim::Value;
@@ -12,6 +12,26 @@ use crate::session::Session;
 pub fn ui(ui: &mut egui::Ui, s: &mut Session, node_view: &mut NodeViewState) {
     let maintain_id = ui.scope_id().with("maintain-size");
     let mut maintain_size = ui.data(|data| data.get_temp(maintain_id)).unwrap_or(true);
+    let mode_id = ui.scope_id().with("stage-view");
+    let mut orbit_mode = ui.data(|data| data.get_temp(mode_id)).unwrap_or(true);
+    let orbit_id = ui.scope_id().with("stage-orbit");
+    ui.horizontal_wrapped(|ui| {
+        if symphony_ui::widgets::segmented(
+            ui,
+            "stage-mode",
+            &mut orbit_mode,
+            &[(true, "3D"), (false, "Side")],
+            false,
+        ) {
+            ui.data_mut(|data| data.insert_temp(mode_id, orbit_mode));
+        }
+        if orbit_mode {
+            s.guides.menu(ui);
+            if ui.button("Reset view").clicked() {
+                ui.data_mut(|data| data.remove::<Orbit>(orbit_id));
+            }
+        }
+    });
     ui.horizontal_wrapped(|ui| {
         if ui.button("Camera properties").clicked() {
             s.select_graph_node(s.doc.display, true);
@@ -53,6 +73,10 @@ pub fn ui(ui: &mut egui::Ui, s: &mut Session, node_view: &mut NodeViewState) {
         theme::GLASS_RADIUS.saturating_sub(4),
         theme::BG_INPUT,
     );
+    if orbit_mode {
+        orbit_stage(ui, &response, &painter, s, orbit_id);
+        return;
+    }
     let diagram = viewport.shrink2(Vec2::new(22.0, 25.0));
     if !diagram.is_positive() {
         return;
@@ -203,6 +227,234 @@ pub fn ui(ui: &mut egui::Ui, s: &mut Session, node_view: &mut NodeViewState) {
     );
 }
 
+#[derive(Clone, Copy)]
+struct Orbit {
+    yaw: f32,
+    pitch: f32,
+    zoom: f32,
+    pan: Vec2,
+}
+
+impl Default for Orbit {
+    fn default() -> Self {
+        Self {
+            yaw: -0.55,
+            pitch: -0.23,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+        }
+    }
+}
+
+/// Orthographic inspection camera. It operates on scene coordinates but
+/// has no effect on the scene camera or its animated properties.
+struct StageProjection {
+    yaw: (f32, f32),
+    pitch: (f32, f32),
+    centre: Pos2,
+    scale: f32,
+}
+
+impl StageProjection {
+    fn project(&self, [x, y, z]: [f32; 3]) -> (Pos2, f32) {
+        let (sy, cy) = self.yaw;
+        let (sp, cp) = self.pitch;
+        let horizontal = x * cy + z * sy;
+        let depth = z * cy - x * sy;
+        let vertical = y * cp - depth * sp;
+        (
+            self.centre + Vec2::new(horizontal, vertical) * self.scale,
+            y * sp + depth * cp,
+        )
+    }
+}
+
+fn guide_on_camera_plane(
+    scene: &symphony_core::doc::Scene,
+    frame: u32,
+    [x, y]: [f32; 2],
+) -> [f32; 3] {
+    let [cx, cy, dolly] = scene.camera_motion.at(frame);
+    let framing = scene.camera_scale(frame);
+    let width = scene.settings.width.max(1) as f32;
+    let height = scene.settings.height.max(1) as f32;
+    [cx + x * width / framing, cy + y * height / framing, dolly]
+}
+
+fn orbit_stage(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    painter: &egui::Painter,
+    s: &mut Session,
+    id: egui::Id,
+) {
+    let rect = response.rect;
+    if rect.width() < 48.0 || rect.height() < 48.0 {
+        return;
+    }
+    let painter = painter.with_clip_rect(rect);
+    let mut orbit: Orbit = ui.data(|data| data.get_temp(id)).unwrap_or_default();
+    if response.dragged_by(egui::PointerButton::Middle)
+        || response.dragged_by(egui::PointerButton::Primary) && ui.input(|i| i.modifiers.shift)
+    {
+        orbit.pan += response.drag_delta();
+    } else if response.dragged_by(egui::PointerButton::Primary) {
+        let delta = response.drag_delta();
+        orbit.yaw = (orbit.yaw + delta.x * 0.008).rem_euclid(std::f32::consts::TAU);
+        orbit.pitch = (orbit.pitch + delta.y * 0.008).clamp(-1.5, 1.5);
+    }
+    if response.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        orbit.zoom = (orbit.zoom * (scroll * 0.002).exp()).clamp(0.25, 8.0);
+    }
+    ui.data_mut(|data| data.insert_temp(id, orbit));
+
+    let distance = s.doc.stage_distance();
+    let [cx, cy, dolly] = s.doc.camera_motion.at(s.frame);
+    let camera = [cx, cy, dolly - distance];
+    let width = s.doc.settings.width.max(1) as f32;
+    let height = s.doc.settings.height.max(1) as f32;
+    let planes: Vec<_> = s
+        .doc
+        .layers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, layer)| {
+            let pose = s.doc.graph.world_pose(layer.node, s.frame).ok()?;
+            (pose.depth.is_finite()
+                && pose.transform.apply(0.0, 0.0).0.is_finite()
+                && pose.transform.apply(0.0, 0.0).1.is_finite())
+            .then_some((index, pose))
+        })
+        .collect();
+    let extent = planes
+        .iter()
+        .fold(distance, |extent, (_, pose)| {
+            extent.max(pose.depth.abs() * 0.8)
+        })
+        .max(camera[2].abs() * 0.8);
+    let projection = StageProjection {
+        yaw: orbit.yaw.sin_cos(),
+        pitch: orbit.pitch.sin_cos(),
+        centre: rect.center() + orbit.pan,
+        scale: rect.width().min(rect.height() * 1.4) * orbit.zoom / (extent * 2.4),
+    };
+    let project = |p| projection.project(p).0;
+    let line = |a, b, stroke| painter.line_segment([project(a), project(b)], stroke);
+
+    let floor = height * 0.5;
+    let grid = Stroke::new(1.0, theme::LINE_STRONG.gamma_multiply(0.45));
+    for i in -6..=6 {
+        let p = i as f32 / 6.0 * distance;
+        line([-distance, floor, p], [distance, floor, p], grid);
+        line([p, floor, -distance], [p, floor, distance], grid);
+    }
+    let stage = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]];
+    // At Z = dolly, project_plane has unit magnification. Use the same
+    // scene-camera aperture so these marks project back onto the 2D guide.
+    let guide = |point| guide_on_camera_plane(&s.doc, s.frame, point);
+    let frame = stage.map(guide);
+    let camera_ink = Stroke::new(1.0, theme::ACCENT_TIME.gamma_multiply(0.55));
+    for point in frame {
+        line(camera, point, camera_ink);
+    }
+    painter.add(egui::Shape::closed_line(
+        frame.map(project).to_vec(),
+        camera_ink,
+    ));
+    painter.circle_filled(project(camera), 4.0, theme::ACCENT_TIME);
+    painter.text(
+        project(camera) + Vec2::new(0.0, 8.0),
+        Align2::CENTER_TOP,
+        "Camera",
+        theme::dense(),
+        theme::TEXT_SECONDARY,
+    );
+
+    let mut planes: Vec<_> = planes
+        .into_iter()
+        .map(|(index, pose)| {
+            let points = stage.map(|[x, y]| {
+                let (x, y) = pose.transform.apply(x * width, y * height);
+                [x, y, pose.depth]
+            });
+            let (x, y) = pose.transform.apply(0.0, 0.0);
+            let (centre, depth) = projection.project([x, y, pose.depth]);
+            (index, points.map(project), centre, depth, pose.depth)
+        })
+        .collect();
+    planes.sort_by(|a, b| b.3.total_cmp(&a.3));
+    let mut hit = None;
+    for (index, points, centre, _, z) in planes {
+        let selected = index == s.selected;
+        let ink = if selected {
+            theme::ACCENT_SELECT
+        } else {
+            theme::TEXT_SECONDARY
+        };
+        let visible = s.layer_visible(index);
+        let ink = if visible {
+            ink
+        } else {
+            ink.gamma_multiply(0.4)
+        };
+        painter.add(egui::Shape::convex_polygon(
+            points.to_vec(),
+            ink.gamma_multiply(0.10),
+            Stroke::new(if selected { 1.75 } else { 1.0 }, ink),
+        ));
+        if selected {
+            painter.text(
+                centre,
+                Align2::CENTER_CENTER,
+                format!("{}  Z {:.0}", s.layer_name(index), z),
+                theme::dense(),
+                theme::TEXT_PRIMARY,
+            );
+        }
+        if response.clicked()
+            && response
+                .interact_pointer_pos()
+                .is_some_and(|p| inside_plane(p, &points))
+        {
+            hit = Some(index);
+        }
+    }
+
+    for point in s.guides.vanishing_points() {
+        line(
+            camera,
+            guide(point),
+            Stroke::new(1.0, theme::ACCENT_SELECT.gamma_multiply(0.55)),
+        );
+    }
+    s.guides
+        .paint_projected(&painter, |point| project(guide(point)));
+    painter.text(
+        rect.left_bottom() + Vec2::new(12.0, -10.0),
+        Align2::LEFT_BOTTOM,
+        "Drag to orbit  ·  Shift-drag or middle-drag to pan  ·  Scroll to zoom",
+        theme::dense(),
+        theme::TEXT_SECONDARY,
+    );
+    if let Some(index) = hit {
+        select_plane(s, index);
+    }
+}
+
+fn inside_plane(point: Pos2, corners: &[Pos2; 4]) -> bool {
+    let mut positive = false;
+    let mut negative = false;
+    for (&a, &b) in corners.iter().zip(corners.iter().cycle().skip(1)) {
+        let edge = b - a;
+        let local = point - a;
+        let cross = edge.x * local.y - edge.y * local.x;
+        positive |= cross > 0.1;
+        negative |= cross < -0.1;
+    }
+    positive != negative
+}
+
 #[derive(Clone)]
 struct PlaneDrag {
     id: NodeId,
@@ -304,6 +556,21 @@ fn set_value(value: &mut Value, frame: u32, next: f32, animate: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_guides_project_back_to_the_camera_guide_coordinates() {
+        let mut scene = symphony_core::doc::Scene::new(Default::default());
+        scene.camera_motion.x = Value::Constant(45.0);
+        scene.camera_motion.y = Value::Constant(-25.0);
+        scene.camera_motion.dolly = Value::Constant(120.0);
+        scene.camera_fov = Value::Constant(95.0);
+        let normalized = [-0.65, 0.2];
+        let [x, y, z] = guide_on_camera_plane(&scene, 1, normalized);
+        let (x, y) = scene.project_plane(1, z).unwrap().apply(x, y);
+        let scale = scene.camera_scale(1);
+        assert!((x * scale / scene.settings.width as f32 - normalized[0]).abs() < 1e-5);
+        assert!((y * scale / scene.settings.height as f32 - normalized[1]).abs() < 1e-5);
+    }
 
     #[test]
     fn maintain_size_preserves_framing_under_a_transformed_parent() {

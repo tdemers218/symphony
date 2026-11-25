@@ -33,7 +33,7 @@ impl Default for Guides {
 }
 
 impl Guides {
-    fn vanishing_points(&self) -> impl Iterator<Item = [f32; 2]> {
+    pub(super) fn vanishing_points(&self) -> impl Iterator<Item = [f32; 2]> {
         let x = self.centre;
         let y = self.horizon;
         match self.perspective {
@@ -89,6 +89,14 @@ impl Guides {
             let (x, y) = view.apply(p[0] * width, p[1] * height);
             Pos2::new(x, y)
         };
+        self.paint_projected(painter, screen);
+    }
+
+    pub(super) fn paint_projected(
+        &self,
+        painter: &egui::Painter,
+        screen: impl Fn([f32; 2]) -> Pos2,
+    ) {
         let line = |a, b, ink| painter.line_segment([screen(a), screen(b)], ink);
         let strong = Stroke::new(1.0, theme::ACCENT_SELECT.gamma_multiply(0.8));
         let faint = Stroke::new(1.0, theme::ACCENT_SELECT.gamma_multiply(0.38));

@@ -1880,12 +1880,7 @@ pub fn ui(
         );
     }
 
-    s.guides.paint(
-        &painter,
-        view,
-        s.doc.settings.width as f32,
-        s.doc.settings.height as f32,
-    );
+    s.guides.paint(&painter, view, w, h);
     let pen_eraser = samples.last().is_some_and(|l| l.tool == PenTool::Eraser);
     draw_cursor(
         ui,

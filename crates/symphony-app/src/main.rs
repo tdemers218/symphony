@@ -2808,7 +2808,7 @@ impl SymphonyApp {
                     &format!("view.show.{v:?}"),
                 )
                 .words(if v == View::Multiplane {
-                    "window panel tab parallax depth side staging"
+                    "window panel tab parallax depth side staging stage 3d orbit guides"
                 } else {
                     "window panel tab"
                 }),
