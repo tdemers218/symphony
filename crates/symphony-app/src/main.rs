@@ -652,10 +652,11 @@ impl SymphonyApp {
         let stroke_detail = saved.as_ref().and_then(|s| s.stroke_detail);
         let colours = saved.as_ref().and_then(|s| s.colours);
         let use_openh264 = saved.as_ref().is_none_or(|s| s.use_openh264);
-        let presets = saved
+        let mut presets = saved
             .as_ref()
             .and_then(|s| s.presets.clone())
             .unwrap_or_default();
+        presets.upgrade_builtin_brushes();
         let search_uses = saved
             .as_ref()
             .map(|s| s.search_uses.clone())
@@ -2223,10 +2224,8 @@ impl SymphonyApp {
                     tip.push_str("\nDrag, scale or rotate the selection");
                     Icon::Transform
                 }
-                // Both tips make vector strokes. The icon shows whether
-                // the current brush uses a texture.
-                Tool::Brush if !crate::views::panels::is_bitmap(&self.s.brush) => Icon::Pen,
-                Tool::Brush => Icon::Brush,
+                Tool::Brush if panels::is_textured_vector(&self.s.brush) => Icon::Pencil,
+                Tool::Brush => Icon::Pen,
                 Tool::Transform => {
                     tip = format!("Transform the peg\n{tip}");
                     Icon::Transform

@@ -123,6 +123,10 @@ pub struct BrushSettings {
     pub max_width: f32,
     /// 0 = raw pen, 1 = very smooth.
     pub smoothing: f32,
+    #[serde(default)]
+    pub stabilization: Stabilization,
+    #[serde(default)]
+    pub preserve_corners: bool,
     /// Pencil start and end tips.
     #[serde(default)]
     pub tips: Tips,
@@ -134,6 +138,24 @@ pub struct BrushSettings {
     /// Textured Vector Brush (tip, grain, spacing, opacity).
     #[serde(default)]
     pub texture: Option<symphony_core::stroke::StrokeTexture>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Stabilization {
+    #[default]
+    Off,
+    Light,
+    Strong,
+}
+
+impl Stabilization {
+    pub fn radius(self) -> f32 {
+        match self {
+            Self::Off => 0.0,
+            Self::Light => 3.0,
+            Self::Strong => 9.0,
+        }
+    }
 }
 
 /// Add points along segments that come within `radius` of `at`, no more
@@ -479,6 +501,8 @@ impl Session {
                 min_width: 0.6,
                 max_width: 10.0,
                 smoothing: 0.4,
+                stabilization: Stabilization::Off,
+                preserve_corners: false,
                 tips: Tips::default(),
                 stencil: None,
                 texture: None,
@@ -487,6 +511,8 @@ impl Session {
                 min_width: 2.0,
                 max_width: 3.0,
                 smoothing: 0.3,
+                stabilization: Stabilization::Off,
+                preserve_corners: false,
                 tips: Tips::default(),
                 stencil: None,
                 texture: None,
@@ -495,6 +521,8 @@ impl Session {
                 min_width: 8.0,
                 max_width: 20.0,
                 smoothing: 0.0,
+                stabilization: Stabilization::Off,
+                preserve_corners: false,
                 tips: Tips::default(),
                 stencil: None,
                 texture: None,
@@ -1530,6 +1558,54 @@ impl Session {
                 d.strokes.iter().any(|st| st.id == *id) || d.fills.iter().any(|f| f.id == *id)
             });
         }
+    }
+
+    pub fn stylable_strokes(&self) -> impl Iterator<Item = &Stroke> {
+        self.selected_strokes().into_iter().filter(|stroke| {
+            stroke.shape.is_empty() && matches!(stroke.kind, StrokeKind::Brush | StrokeKind::Pencil)
+        })
+    }
+
+    pub fn style_selected_strokes(&mut self, style: impl Fn(&mut Stroke)) {
+        self.validate_selection();
+        if self
+            .doc
+            .column(self.selected)
+            .is_some_and(|column| column.locked)
+        {
+            return;
+        }
+        let Some(drawing) = self.selection.drawing else {
+            return;
+        };
+        let (before, after): (Vec<_>, Vec<_>) = self
+            .stylable_strokes()
+            .filter_map(|stroke| {
+                let mut next = stroke.clone();
+                style(&mut next);
+                (next != *stroke).then(|| (stroke.clone(), next))
+            })
+            .unzip();
+        if before.is_empty() {
+            return;
+        }
+        for texture in after.iter().filter_map(|stroke| stroke.texture) {
+            for key in [texture.tip, texture.grain].into_iter().flatten() {
+                crate::brush_import::ensure_texture(&mut self.doc, key);
+            }
+        }
+        let ids = before.iter().map(|stroke| stroke.id).collect::<Vec<_>>();
+        let mut edits = crate::paint_links::refit(&self.doc.drawings[&drawing], &after, &ids, None);
+        edits.insert(
+            0,
+            Edit::SetStrokes {
+                drawing,
+                before,
+                after,
+            },
+        );
+        self.history
+            .apply(&mut self.doc, "Change selected brush", edits);
     }
 
     pub fn selection_cut_outline(&self) -> Option<&[[f32; 2]]> {
@@ -3570,6 +3646,25 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restyling_preserves_the_selected_path_and_palette_link() {
+        let mut s = Session::new_scene();
+        square_drawing(&mut s);
+        s.select_all();
+        let before = s.stylable_strokes().next().unwrap().clone();
+        s.style_selected_strokes(|stroke| {
+            stroke.max_width *= 2.0;
+            stroke.tips.start = symphony_core::stroke::Tip::Flat;
+        });
+        let after = s.stylable_strokes().next().unwrap();
+        assert_eq!(after.points, before.points);
+        assert_eq!(after.swatch, before.swatch);
+        assert_eq!(after.max_width, before.max_width * 2.0);
+        assert_eq!(after.tips.start, symphony_core::stroke::Tip::Flat);
+        s.undo();
+        assert_eq!(s.stylable_strokes().next(), Some(&before));
+    }
 
     #[test]
     fn cutter_splits_line_and_fill_selects_inside_and_undoes_together() {

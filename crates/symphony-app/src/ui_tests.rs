@@ -1323,39 +1323,24 @@ fn the_line_tool_draws_straight_snapped_and_bent_lines() {
     );
 }
 
-/// Brush kinds: Bitmap lists textured brushes; Vector lists clean ones plus
-/// a vector version of every bitmap brush (same name, no stamps).
 #[test]
-fn bitmap_brushes_also_come_as_vector_versions() {
+fn textured_brush_list_keeps_presets_with_weak_outline_conversions() {
     use crate::presets::Preset;
     use crate::views::panels::brush_list;
     let s = crate::session::Session::new_scene();
-    let clean = Preset {
-        name: "Ink".into(),
-        settings: s.brush,
-        source: None,
-        tip: None,
-        grain: None,
-    };
-    let mut stamped = clean.clone();
-    stamped.name = "Grainy".into();
+    let clean = Preset::new("Ink", s.brush);
+    let mut stamped = Preset::new("Grainy", s.brush);
     stamped.settings.texture = Some(symphony_core::stroke::StrokeTexture::default());
-    let all = vec![clean, stamped];
+    stamped.vector_conversion = Some(true);
+    let mut soft = stamped.clone();
+    soft.name = "Powder".into();
+    soft.vector_conversion = Some(false);
+    let all = vec![clean, stamped, soft];
     let names = |l: Vec<Preset>| l.into_iter().map(|p| p.name).collect::<Vec<_>>();
-    assert_eq!(names(brush_list(&all, true)), ["Grainy"]);
+    assert_eq!(names(brush_list(&all, true)), ["Grainy", "Powder"]);
     let vector = brush_list(&all, false);
     assert_eq!(names(vector.clone()), ["Ink", "Grainy"]);
-    assert!(
-        vector
-            .iter()
-            .all(|p| !crate::views::panels::is_bitmap(&p.settings)),
-        "vector versions are vector brushes"
-    );
-    let grainy = vector.iter().find(|p| p.name == "Grainy").unwrap();
-    assert!(
-        grainy.settings.texture.is_some_and(|t| t.vector),
-        "it keeps its tip, stamped as shapes"
-    );
+    assert!(vector[1].settings.texture.is_some_and(|t| t.vector));
 }
 
 /// The pen's tilt and rotation are kept on the line's points (so brushes

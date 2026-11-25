@@ -29,6 +29,8 @@ pub struct Preset {
     pub tip: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_conversion: Option<bool>,
 }
 
 impl Preset {
@@ -39,6 +41,7 @@ impl Preset {
             source: None,
             tip: None,
             grain: None,
+            vector_conversion: None,
         }
     }
 }
@@ -46,6 +49,8 @@ impl Preset {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Presets {
     pub brush: Vec<Preset>,
+    #[serde(default)]
+    brush_library_version: u8,
     pub pencil: Vec<Preset>,
     /// The preset last picked for each tool, by name, for highlighting.
     #[serde(default)]
@@ -78,6 +83,8 @@ fn settings(min: f32, max: f32, smoothing: f32) -> BrushSettings {
         min_width: min,
         max_width: max,
         smoothing,
+        stabilization: Default::default(),
+        preserve_corners: false,
         tips: Tips::default(),
         stencil: None,
         texture: None,
@@ -94,6 +101,23 @@ fn tapered() -> Stencil {
     s
 }
 
+fn expressive_brushes() -> [Preset; 3] {
+    let mut nib = settings(1.2, 14.0, 0.3);
+    nib.tips = Tips {
+        start: Tip::Flat,
+        end: Tip::Flat,
+    };
+    let mut taper = settings(0.25, 11.0, 0.4);
+    taper.stencil = Some(tapered());
+    let mut cleanup = settings(0.6, 7.0, 0.4);
+    cleanup.stabilization = crate::session::Stabilization::Light;
+    [
+        Preset::new("Square ink", nib),
+        Preset::new("Tapered ink", taper),
+        Preset::new("Steady cleanup", cleanup),
+    ]
+}
+
 impl Default for Presets {
     /// Symphony's own starter set.
     fn default() -> Self {
@@ -106,12 +130,16 @@ impl Default for Presets {
             end: Tip::Flat,
         };
         Presets {
+            brush_library_version: 1,
             brush: vec![
                 p("Fine detail", settings(0.4, 3.0, 0.5)),
                 p("Inking", settings(0.6, 10.0, 0.4)),
                 p("Bold", settings(2.0, 20.0, 0.3)),
                 p("Even marker", settings(6.0, 6.0, 0.3)),
-            ],
+            ]
+            .into_iter()
+            .chain(expressive_brushes())
+            .collect(),
             pencil: vec![
                 p("Clean line", settings(2.0, 3.0, 0.3)),
                 p("Thin line", settings(1.0, 1.5, 0.3)),
@@ -126,6 +154,17 @@ impl Default for Presets {
 }
 
 impl Presets {
+    pub fn upgrade_builtin_brushes(&mut self) {
+        if self.brush_library_version < 1 {
+            for preset in expressive_brushes() {
+                if self.brush.iter().all(|old| old.name != preset.name) {
+                    self.brush.push(preset);
+                }
+            }
+            self.brush_library_version = 1;
+        }
+    }
+
     pub fn list(&self, tool: PresetTool) -> &Vec<Preset> {
         match tool {
             PresetTool::Brush => &self.brush,
@@ -262,6 +301,7 @@ impl Presets {
                     source: p.source.filter(|s| s.len() <= 40),
                     tip: p.tip.filter(plain),
                     grain: p.grain.filter(plain),
+                    vector_conversion: p.vector_conversion,
                 });
                 n += 1;
             }
@@ -334,13 +374,17 @@ mod tests {
         let ours = Presets::default();
         ours.export(&file).unwrap();
         let mut other = Presets {
+            brush_library_version: 1,
             brush: Vec::new(),
             pencil: Vec::new(),
             current_brush: None,
             current_pencil: None,
             grid: false,
         };
-        assert_eq!(other.import(&file).unwrap(), 8);
+        assert_eq!(
+            other.import(&file).unwrap(),
+            ours.brush.len() + ours.pencil.len()
+        );
         assert_eq!(other.brush, ours.brush);
         assert_eq!(other.pencil, ours.pencil);
         // Importing again keeps both copies.

@@ -1596,7 +1596,9 @@ pub fn ui(
                             sm.rotation,
                         ),
                     };
-                    let mut smoother = Smoother::new(settings.smoothing);
+                    let mut smoother = Smoother::new(settings.smoothing)
+                        .with_stabilization(settings.stabilization.radius() * local_px)
+                        .with_corner_preservation(settings.preserve_corners);
                     let first = smoother.push(p, 0.0).unwrap_or(p);
                     // Sizes are scene units by default, so zooming in makes
                     // the brush look bigger, as on paper. With "Brush size
@@ -1616,16 +1618,13 @@ pub fn ui(
                             min_width: settings.min_width * k,
                             max_width: settings.max_width * k,
                             points: vec![first],
-                            // Start and end tips are a pencil property.
-                            tips: if kind == StrokeKind::Pencil {
-                                settings.tips
-                            } else {
-                                Default::default()
-                            },
+                            tips: settings.tips,
                             texture: settings.texture.filter(|_| kind == StrokeKind::Brush),
                             shape: Vec::new(),
                         },
-                        stencil: settings.stencil.filter(|_| kind == StrokeKind::Pencil),
+                        stencil: settings.stencil.filter(|_| {
+                            kind != StrokeKind::Invisible && settings.texture.is_none()
+                        }),
                         live: None,
                         line: (s.tool == Tool::Line).then_some(LineDraft {
                             start: [first.x, first.y],
