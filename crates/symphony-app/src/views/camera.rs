@@ -335,27 +335,37 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         [x * cy + depth * sy, y * cx - z * sx, depth * cy - x * sy]
     };
     let view = |point| rotate(point, 24.0, -32.0);
-    // Peg orientation is Y × X × Z. Each ring uses the axes upstream
-    // of the angle it edits, so the grabbed ring stays put during the drag.
-    let bases = [
-        [[0.0, 35.0, 0.0], [0.0, 0.0, 35.0]].map(|p| view(rotate(p, 0.0, angles[1]))),
-        [[0.0, 0.0, 35.0], [35.0, 0.0, 0.0]].map(view),
-        [[35.0, 0.0, 0.0], [0.0, 35.0, 0.0]].map(|p| view(rotate(p, angles[0], angles[1]))),
-    ];
-    let rings = bases.map(|[[ax, ay, az], [bx, by, bz]]| {
-        // Start edge-on so each half is one continuous arc. The first
-        // half goes towards the viewer and is drawn above the cube.
-        let phase = bz.atan2(az) + std::f32::consts::FRAC_PI_2;
-        [0, 1].map(|half| {
-            (0..=32)
-                .map(|i| {
-                    let t = phase + (half * 32 + i) as f32 * std::f32::consts::PI / 32.0;
-                    let (sin, cos) = t.sin_cos();
-                    centre + Vec2::new(ax * cos + bx * sin, ay * cos + by * sin)
-                })
-                .collect::<Vec<_>>()
+    // All three rings and the cube use the same local-to-peg basis.
+    let orient = |[x, y, z]: [f32; 3], [pitch, yaw]: [f32; 2], roll: f32| {
+        let xy = egui::emath::Rot2::from_angle(roll.to_radians()) * Vec2::new(x, y);
+        rotate([xy.x, xy.y, z], pitch, yaw)
+    };
+    let ring_bases = |angles, roll| {
+        [
+            [[0.0, 35.0, 0.0], [0.0, 0.0, 35.0]],
+            [[0.0, 0.0, 35.0], [35.0, 0.0, 0.0]],
+            [[35.0, 0.0, 0.0], [0.0, 35.0, 0.0]],
+        ]
+        .map(|basis| basis.map(|p| view(orient(p, angles, roll))))
+    };
+    let ring_paths = |bases: [[[f32; 3]; 2]; 3]| {
+        bases.map(|[[ax, ay, az], [bx, by, bz]]| {
+            // Start edge-on so each half is one continuous arc. The first
+            // half goes towards the viewer and is drawn above the cube.
+            let phase = bz.atan2(az) + std::f32::consts::FRAC_PI_2;
+            [0, 1].map(|half| {
+                (0..=32)
+                    .map(|i| {
+                        let t = phase + (half * 32 + i) as f32 * std::f32::consts::PI / 32.0;
+                        let (sin, cos) = t.sin_cos();
+                        centre + Vec2::new(ax * cos + bx * sin, ay * cos + by * sin)
+                    })
+                    .collect::<Vec<_>>()
+            })
         })
-    });
+    };
+    let bases = ring_bases(angles, roll);
+    let rings = ring_paths(bases);
     let nearest = |p: Pos2| {
         rings
             .iter()
@@ -411,15 +421,63 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
             (delta.dot(tangent.normalized()) / 35.0).to_degrees()
         };
         if rotation != 0.0 {
-            if axis == 2 {
-                roll += rotation;
-                s.adjust_peg(s.selected, |values| values.rotation = roll);
+            let (sin, cos) = rotation.to_radians().sin_cos();
+            let columns = std::array::from_fn::<_, 3, _>(|column| {
+                let mut p = [0.0; 3];
+                if column == axis {
+                    p[axis] = 1.0;
+                } else {
+                    p[column] = cos;
+                    let next = (axis + 1) % 3;
+                    let last = (axis + 2) % 3;
+                    if column == next {
+                        p[last] = sin;
+                    } else {
+                        p[next] = -sin;
+                    }
+                }
+                orient(p, angles, roll)
+            });
+            let [x, y, z] = columns;
+            let pitch = (-z[1]).atan2(z[0].hypot(z[2])).to_degrees();
+            let (yaw, spin) = if z[0].hypot(z[2]) > 1e-5 {
+                (z[0].atan2(z[2]).to_degrees(), x[1].atan2(y[1]).to_degrees())
             } else {
-                angles[axis] = (angles[axis] + rotation + 180.0).rem_euclid(360.0) - 180.0;
-                s.set_selected_peg_tilt(true, angles);
-            }
+                ((-x[2]).atan2(x[0]).to_degrees(), 0.0)
+            };
+            // Equivalent Euler triples can differ by half a turn. Keep
+            // the closest one to preserve continuity in keyed angles.
+            let previous = [angles[0], angles[1], roll];
+            let near = |candidate: [f32; 3]| {
+                std::array::from_fn::<_, 3, _>(|i| {
+                    previous[i] + (candidate[i] - previous[i] + 180.0).rem_euclid(360.0) - 180.0
+                })
+            };
+            let direct = near([pitch, yaw, spin]);
+            let alternate = near([180.0 - pitch, yaw + 180.0, spin + 180.0]);
+            let distance = |values: [f32; 3]| {
+                values
+                    .into_iter()
+                    .zip(previous)
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f32>()
+            };
+            let [pitch, yaw, spin] = if distance(direct) <= distance(alternate) {
+                direct
+            } else {
+                alternate
+            };
+            angles = [pitch, yaw];
+            roll = spin;
+            s.set_selected_peg_tilt(true, angles);
+            s.adjust_peg(s.selected, |values| values.rotation = roll);
         }
     }
+    let rings = if active.is_some() {
+        ring_paths(ring_bases(angles, roll))
+    } else {
+        rings
+    };
     let colours = [
         egui::Color32::from_rgb(235, 113, 117),
         egui::Color32::from_rgb(151, 206, 114),
@@ -446,11 +504,13 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         ),
     ];
     shapes.extend(ring_shapes(false));
+    let proximity = ui.ctx().pointer_hover_pos().map_or(0.0, |p| {
+        ((54.0 - p.distance(centre)) / 28.0).clamp(0.0, 1.0)
+    });
+    let half_size = 16.0 + 2.4 * proximity * proximity * (3.0 - 2.0 * proximity);
     let cube = std::array::from_fn::<_, 8, _>(|i| {
-        let point = [1, 2, 4].map(|bit| if i & bit == 0 { -16.0 } else { 16.0 });
-        let [x, y, z] = point;
-        let rolled = egui::emath::Rot2::from_angle(roll.to_radians()) * Vec2::new(x, y);
-        let [x, y, z] = view(rotate([rolled.x, rolled.y, z], angles[0], angles[1]));
+        let point = [1, 2, 4].map(|bit| if i & bit == 0 { -half_size } else { half_size });
+        let [x, y, z] = view(orient(point, angles, roll));
         (centre + Vec2::new(x, y), z)
     });
     let mut faces = [
