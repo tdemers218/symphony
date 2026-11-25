@@ -322,7 +322,7 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         .tilt
         .as_ref()
         .map_or([0.0; 2], |tilt| [tilt[0].at(s.frame), tilt[1].at(s.frame)]);
-    let roll = peg.rotation.at(s.frame);
+    let mut roll = peg.rotation.at(s.frame);
     let centre = canvas.right_bottom() - Vec2::splat(57.0);
     let rect = Rect::from_center_size(centre, Vec2::splat(94.0));
     let response = ui.interact(rect, ui.scope_id().with("peg-orientation"), Sense::drag());
@@ -335,14 +335,14 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         [x * cy + depth * sy, y * cx - z * sx, depth * cy - x * sy]
     };
     let view = |point| rotate(point, 24.0, -32.0);
-    let rings = std::array::from_fn::<_, 3, _>(|axis| {
-        let on_plane = |a, b| match axis {
-            0 => [0.0, a, b],
-            1 => [a, 0.0, b],
-            _ => [a, b, 0.0],
-        };
-        let [ax, ay, az] = view(on_plane(35.0, 0.0));
-        let [bx, by, bz] = view(on_plane(0.0, 35.0));
+    // Peg orientation is Y × X × Z. Each ring uses the axes upstream
+    // of the angle it edits, so the grabbed ring stays put during the drag.
+    let bases = [
+        [[0.0, 35.0, 0.0], [0.0, 0.0, 35.0]].map(|p| view(rotate(p, 0.0, angles[1]))),
+        [[0.0, 0.0, 35.0], [35.0, 0.0, 0.0]].map(view),
+        [[35.0, 0.0, 0.0], [0.0, 35.0, 0.0]].map(|p| view(rotate(p, angles[0], angles[1]))),
+    ];
+    let rings = bases.map(|[[ax, ay, az], [bx, by, bz]]| {
         // Start edge-on so each half is one continuous arc. The first
         // half goes towards the viewer and is drawn above the cube.
         let phase = bz.atan2(az) + std::f32::consts::FRAC_PI_2;
@@ -384,6 +384,42 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
     let active = ui
         .data(|data| data.get_temp::<Option<usize>>(drag_id))
         .flatten();
+    let locked = s.doc.column(s.selected).is_some_and(|column| column.locked);
+    if let Some((axis, pointer)) = active
+        .filter(|_| !locked && response.dragged_by(egui::PointerButton::Primary))
+        .zip(response.interact_pointer_pos())
+    {
+        let delta = response.drag_delta();
+        let [[ax, ay, _], [bx, by, _]] = bases[axis];
+        let area = ax * by - ay * bx;
+        let rotation = if area.abs() > 175.0 {
+            let on_ring = |p: Pos2| {
+                let p = p - centre;
+                Vec2::new((by * p.x - bx * p.y) / area, (ax * p.y - ay * p.x) / area)
+            };
+            let previous = on_ring(pointer - delta);
+            let current = on_ring(pointer);
+            (previous.x * current.y - previous.y * current.x)
+                .atan2(previous.dot(current))
+                .to_degrees()
+        } else {
+            // Near edge-on the inverse ellipse is unstable. Use signed
+            // motion along its longest visible direction.
+            let a = Vec2::new(ax, ay);
+            let b = Vec2::new(bx, by);
+            let tangent = if a.length_sq() > b.length_sq() { -a } else { b };
+            (delta.dot(tangent.normalized()) / 35.0).to_degrees()
+        };
+        if rotation != 0.0 {
+            if axis == 2 {
+                roll += rotation;
+                s.adjust_peg(s.selected, |values| values.rotation = roll);
+            } else {
+                angles[axis] = (angles[axis] + rotation + 180.0).rem_euclid(360.0) - 180.0;
+                s.set_selected_peg_tilt(true, angles);
+            }
+        }
+    }
     let colours = [
         egui::Color32::from_rgb(235, 113, 117),
         egui::Color32::from_rgb(151, 206, 114),
@@ -412,22 +448,22 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
     shapes.extend(ring_shapes(false));
     let cube = std::array::from_fn::<_, 8, _>(|i| {
         let point = [1, 2, 4].map(|bit| if i & bit == 0 { -16.0 } else { 16.0 });
-        let [x, y, z] = rotate(point, angles[0], angles[1]);
+        let [x, y, z] = point;
         let rolled = egui::emath::Rot2::from_angle(roll.to_radians()) * Vec2::new(x, y);
-        let [x, y, z] = view([rolled.x, rolled.y, z]);
+        let [x, y, z] = view(rotate([rolled.x, rolled.y, z], angles[0], angles[1]));
         (centre + Vec2::new(x, y), z)
     });
     let mut faces = [
-        ([0, 1, 3, 2], 110),
-        ([4, 6, 7, 5], 110),
-        ([0, 4, 5, 1], 153),
-        ([2, 3, 7, 6], 153),
-        ([0, 2, 6, 4], 83),
-        ([1, 5, 7, 3], 83),
+        ([0, 1, 3, 2], 2, 0.58),
+        ([4, 6, 7, 5], 2, 0.88),
+        ([0, 4, 5, 1], 1, 0.58),
+        ([2, 3, 7, 6], 1, 0.88),
+        ([0, 2, 6, 4], 0, 0.58),
+        ([1, 5, 7, 3], 0, 0.88),
     ];
     let depth = |face: [usize; 4]| face.iter().map(|&index| cube[index].1).sum::<f32>();
     faces.sort_by(|a, b| depth(b.0).total_cmp(&depth(a.0)));
-    for (face, shade) in faces {
+    for (face, axis, shade) in faces {
         let mut points = face.map(|i| cube[i].0);
         let a = points[1] - points[0];
         let b = points[2] - points[0];
@@ -436,32 +472,12 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         }
         shapes.push(Shape::convex_polygon(
             points.to_vec(),
-            egui::Color32::from_gray(shade),
+            theme::BG_RAISED.lerp_to_gamma(colours[axis], shade),
             EStroke::new(0.9, theme::ACCENT_SELECT.gamma_multiply(0.82)),
         ));
     }
     shapes.extend(ring_shapes(true));
     shapes.push(Shape::circle_filled(centre, 2.0, theme::ACCENT_SELECT));
-    let locked = s.doc.column(s.selected).is_some_and(|column| column.locked);
-    if let Some(axis) =
-        active.filter(|_| !locked && response.dragged_by(egui::PointerButton::Primary))
-    {
-        let delta = response.drag_delta();
-        if axis == 2 {
-            if let Some(pointer) = response.interact_pointer_pos() {
-                let previous = pointer - centre - delta;
-                let current = pointer - centre;
-                let rotation = (previous.x * current.y - previous.y * current.x)
-                    .atan2(previous.dot(current))
-                    .to_degrees();
-                s.adjust_peg(s.selected, |values| values.rotation += rotation);
-            }
-        } else {
-            let motion = if axis == 0 { -delta.y } else { delta.x };
-            angles[axis] = (angles[axis] + motion + 180.0).rem_euclid(360.0) - 180.0;
-            s.set_selected_peg_tilt(true, angles);
-        }
-    }
     let busy = response.contains_pointer() || response.dragged() || response.drag_stopped();
     if response.drag_stopped() {
         ui.data_mut(|data| data.remove::<Option<usize>>(drag_id));
