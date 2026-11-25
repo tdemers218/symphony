@@ -342,7 +342,6 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         let depth = y * sx + z * cx;
         [x * cy + depth * sy, y * cx - z * sx, depth * cy - x * sy]
     };
-    let view = |point| rotate(point, 24.0, -32.0);
     // All three rings and the cube use the same local-to-peg basis.
     let orient = |[x, y, z]: [f32; 3], [pitch, yaw]: [f32; 2], roll: f32| {
         let xy = egui::emath::Rot2::from_angle(roll.to_radians()) * Vec2::new(x, y);
@@ -369,7 +368,7 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
             [[0.0, 0.0, radius], [radius, 0.0, 0.0]],
             [[radius, 0.0, 0.0], [0.0, radius, 0.0]],
         ]
-        .map(|basis| basis.map(|p| view(orient(p, angles, roll))))
+        .map(|basis| basis.map(|p| orient(p, angles, roll)))
     };
     let ring_paths = |bases: [[[f32; 3]; 2]; 3]| {
         bases.map(|[[ax, ay, az], [bx, by, bz]]| {
@@ -552,7 +551,7 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
     let half_size = 16.0 * scale;
     let cube = std::array::from_fn::<_, 8, _>(|i| {
         let point = [1, 2, 4].map(|bit| if i & bit == 0 { -half_size } else { half_size });
-        let [x, y, z] = view(orient(point, angles, roll));
+        let [x, y, z] = orient(point, angles, roll);
         (centre + Vec2::new(x, y), z)
     });
     let mut faces = [
@@ -569,7 +568,11 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         let mut points = face.map(|i| cube[i].0);
         let a = points[1] - points[0];
         let b = points[2] - points[0];
-        if a.x * b.y < a.y * b.x {
+        let area = a.x * b.y - a.y * b.x;
+        if area.abs() < 0.01 {
+            continue;
+        }
+        if area < 0.0 {
             points.reverse();
         }
         shapes.push(Shape::convex_polygon(
