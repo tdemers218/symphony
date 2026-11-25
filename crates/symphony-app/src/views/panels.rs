@@ -545,6 +545,34 @@ fn vector_version(p: &Preset) -> Preset {
     v
 }
 
+pub fn select_brush_kind(s: &mut Session, presets: &mut Presets, textured: bool) {
+    if textured == is_textured_vector(&s.brush) {
+        return;
+    }
+    let tool = PresetTool::Brush;
+    let want = textured;
+    let list = brush_list(presets.list(tool), want);
+    let current = presets.current(tool);
+    let pick = list
+        .iter()
+        .find(|p| Some(p.name.as_str()) == current)
+        .or_else(|| list.first())
+        .cloned();
+    match pick {
+        Some(p) => {
+            s.brush = p.settings;
+            presets.set_current(tool, Some(p.name));
+        }
+        None => {
+            s.brush.texture = want.then(|| symphony_core::stroke::StrokeTexture {
+                spacing: 0.1,
+                ..Default::default()
+            });
+            presets.set_current(tool, None);
+        }
+    }
+}
+
 fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pencil: bool) {
     let tool = if pencil {
         PresetTool::Pencil
@@ -563,26 +591,7 @@ fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pen
             false,
         );
         if want != textured {
-            let list = brush_list(presets.list(tool), want);
-            let current = presets.current(tool);
-            let pick = list
-                .iter()
-                .find(|p| Some(p.name.as_str()) == current)
-                .or_else(|| list.first())
-                .cloned();
-            match pick {
-                Some(p) => {
-                    s.brush = p.settings;
-                    presets.set_current(tool, Some(p.name));
-                }
-                None => {
-                    s.brush.texture = want.then(|| symphony_core::stroke::StrokeTexture {
-                        spacing: 0.1,
-                        ..Default::default()
-                    });
-                    presets.set_current(tool, None);
-                }
-            }
+            select_brush_kind(s, presets, want);
         }
         ui.add_space(6.0);
     }
