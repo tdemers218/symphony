@@ -297,7 +297,7 @@ impl Scene {
         let pose = self.graph.world_pose(node, frame).ok()?;
         Some(
             self.project_plane(frame, pose.depth)?
-                .compose(pose.transform),
+                .compose(pose.artwork_plane().unwrap_or(pose.transform)),
         )
     }
 

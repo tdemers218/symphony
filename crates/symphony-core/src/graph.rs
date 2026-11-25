@@ -462,7 +462,7 @@ impl StagePose {
         }))
     }
 
-    fn artwork_plane(self) -> Option<Affine> {
+    pub fn artwork_plane(self) -> Option<Affine> {
         if !self.camera_facing {
             return None;
         }
@@ -494,7 +494,7 @@ pub struct RenderItem {
     /// The pegs' transform (Mesh Warps count as no change here: tools
     /// work on the drawing as drawn).
     pub transform: Affine,
-    /// Physical plane for imported images when vector artwork faces Camera.
+    /// Physical plane for centre paths and fills when stroke width faces Camera.
     pub image_transform: Option<Affine>,
     pub depth: f32,
     pub matte_pass: bool,

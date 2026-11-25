@@ -719,7 +719,7 @@ pub(super) fn rotation_3d(ui: &mut egui::Ui, s: &mut Session) {
         }
         if enabled {
             if widgets::checkbox(ui, &mut face_camera, "Face Camera")
-                .on_hover_text("Keep vector strokes and fills front-facing as the plane tilts.")
+                .on_hover_text("Tilt the stroke path while keeping its width facing Camera.")
                 .changed()
             {
                 s.set_selected_peg_face_camera(face_camera);
@@ -744,7 +744,7 @@ pub(super) fn rotation_3d(ui: &mut egui::Ui, s: &mut Session) {
     });
     hint(
         ui,
-        "Rotates the drawing plane. To move it in depth, use 3D View.",
+        "Drag Tilt X or Tilt Y on the canvas. To move in depth, use 3D View.",
     );
 }
 

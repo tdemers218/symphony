@@ -266,6 +266,26 @@ pub fn transformed(stroke: &Stroke, m: Affine) -> Stroke {
     out
 }
 
+/// Build camera-facing ink around a projected centreline. Existing
+/// contours have no independent width profile and use the plane transform.
+pub fn projected_stroke<'a>(
+    stroke: &'a Stroke,
+    plane: Affine,
+    facing: Option<Affine>,
+) -> (std::borrow::Cow<'a, Stroke>, Affine) {
+    if let Some((facing, inverse)) = facing.and_then(|m| Some((m, m.inverse()?))) {
+        if stroke.shape.is_empty() {
+            let path = inverse.compose(plane);
+            let mut projected = stroke.clone();
+            for point in &mut projected.points {
+                (point.x, point.y) = path.apply(point.x, point.y);
+            }
+            return (std::borrow::Cow::Owned(projected), facing);
+        }
+    }
+    (std::borrow::Cow::Borrowed(stroke), plane)
+}
+
 /// Is a point inside a closed polygon (even-odd rule)? For lasso selection.
 pub fn inside_polygon(x: f32, y: f32, poly: &[[f32; 2]]) -> bool {
     let mut inside = false;
@@ -306,6 +326,43 @@ mod tests {
             texture: None,
             shape: Vec::new(),
         }
+    }
+
+    #[test]
+    fn facing_projection_moves_the_path_without_scaling_width() {
+        use symphony_core::stroke::{ArtLayer, StrokeKind};
+        let mut stroke = Stroke {
+            id: symphony_core::id::Id(1),
+            swatch: symphony_core::id::Id(2),
+            kind: StrokeKind::Brush,
+            art: ArtLayer::LineArt,
+            min_width: 3.0,
+            max_width: 12.0,
+            tips: Default::default(),
+            points: Vec::new(),
+            shape: Vec::new(),
+            texture: None,
+        };
+        stroke.points.push(Point {
+            x: 10.0,
+            y: 4.0,
+            pressure: 0.75,
+            pen: Default::default(),
+        });
+        let (projected, view) =
+            projected_stroke(&stroke, Affine::scale(0.0, 1.0), Some(Affine::IDENTITY));
+        assert_eq!(
+            view.apply(projected.points[0].x, projected.points[0].y),
+            (0.0, 4.0)
+        );
+        assert_eq!(
+            (
+                projected.min_width,
+                projected.max_width,
+                projected.points[0].pressure
+            ),
+            (3.0, 12.0, 0.75)
+        );
     }
 
     #[test]

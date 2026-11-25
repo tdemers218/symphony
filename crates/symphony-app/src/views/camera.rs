@@ -310,6 +310,57 @@ fn fit_zoom(rect: Rect, w: f32, h: f32) -> f32 {
 
 /// Scene units -> screen points for this canvas rect. The zoom is
 /// absolute: the rect only places the centre.
+fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, transform: Affine, s: &mut Session) -> bool {
+    if !matches!(s.tool, Tool::Transform | Tool::Select)
+        || s.tool == Tool::Select && s.selection.strokes.is_empty()
+        || canvas.width() < 170.0
+        || canvas.height() < 60.0
+    {
+        return false;
+    }
+    let Some(peg) = s.transform_peg(s.selected).filter(|peg| peg.tilt_enabled) else {
+        return false;
+    };
+    let mut angles = peg
+        .tilt
+        .as_ref()
+        .map_or([0.0; 2], |tilt| [tilt[0].at(s.frame), tilt[1].at(s.frame)]);
+    let pivot = to_pos(transform.apply(peg.pivot.0, peg.pivot.1));
+    let x = (pivot.x + 22.0).clamp(canvas.left() + 8.0, canvas.right() - 152.0);
+    let y = (pivot.y - 42.0).clamp(canvas.top() + 8.0, canvas.bottom() - 36.0);
+    let glyphs = Rect::from_min_size(Pos2::new(x, y), Vec2::new(144.0, 28.0));
+    ui.painter()
+        .rect_filled(glyphs, theme::RADIUS_CONTROL, theme::GLASS_FLOATING);
+    let locked = s.doc.column(s.selected).is_some_and(|column| column.locked);
+    let mut busy = false;
+    if !locked {
+        for (axis, label) in ["Tilt X ", "Tilt Y "].into_iter().enumerate() {
+            let rect = Rect::from_min_size(
+                glyphs.left_top() + Vec2::new(3.0 + 71.0 * axis as f32, 2.0),
+                Vec2::new(67.0, 24.0),
+            );
+            let response = ui
+                .put(
+                    rect,
+                    egui::DragValue::new(&mut angles[axis])
+                        .prefix(label)
+                        .suffix("°")
+                        .range(-180.0..=180.0)
+                        .speed(0.6),
+                )
+                .on_hover_text("Drag to tilt the drawing plane");
+            busy |= response.contains_pointer() || response.dragged() || response.drag_stopped();
+            if response.changed() {
+                s.set_selected_peg_tilt(true, angles);
+            }
+            if response.drag_stopped() || response.lost_focus() {
+                s.end_gesture();
+            }
+        }
+    }
+    busy
+}
+
 fn view_transform(state: &CanvasState, rect: Rect) -> Affine {
     let c = rect.center() + state.pan;
     let scale = state.zoom * state.framing;
@@ -1228,7 +1279,7 @@ pub fn ui(
     // Drawings bent by Mesh Warps: (drawing, its warp).
     // (drawing, its warp, projection for both vector and raster artwork)
     let mut warps: Vec<(Id, std::sync::Arc<symphony_core::warp::Warp>, Affine)> = Vec::new();
-    let mut image_planes = Vec::new();
+    let mut facing_planes = Vec::new();
     let items: Vec<select::Item> = if drawing_only {
         s.doc
             .exposed(s.selected, s.frame)
@@ -1247,9 +1298,9 @@ pub fn ui(
                 }
                 let layer = s.doc.layers.iter().position(|l| l.node == item.node)?;
                 let plane = s.doc.project_plane(s.frame, item.depth)?;
-                let transform = plane.compose(item.transform);
-                if let Some(image) = item.image_transform {
-                    image_planes.push((layer, plane.compose(image)));
+                let transform = plane.compose(item.image_transform.unwrap_or(item.transform));
+                if item.image_transform.is_some() && item.warp.is_none() {
+                    facing_planes.push((layer, plane.compose(item.transform)));
                 }
                 if let Some(w) = &item.warp {
                     warps.push((item.drawing, w.clone(), plane));
@@ -1285,12 +1336,6 @@ pub fn ui(
                     .and_then(|(_, warp, stage)| {
                         Some(view.compose(*stage).compose(warp.raster_transform()?))
                     })
-                    .or_else(|| {
-                        image_planes
-                            .iter()
-                            .find(|(i, _)| i == layer)
-                            .map(|(_, m)| view.compose(*m))
-                    })
                     .unwrap_or(world);
                 state
                     .strokes
@@ -1307,6 +1352,10 @@ pub fn ui(
                 }
                 None => (original, world),
             };
+            let facing = facing_planes
+                .iter()
+                .find(|(index, _)| index == layer)
+                .map(|(_, m)| view.compose(*m));
             // The sketch always shows (faint unless it's being drawn on).
             let sketch = s.sketch_opacity();
             for art in ArtLayer::STACK {
@@ -1358,11 +1407,13 @@ pub fn ui(
                         }
                         _ => world,
                     };
+                    let (projected, transform) =
+                        symphony_vector::projected_stroke(st, transform, facing);
                     paint_stroke(
                         &painter,
                         &mut state.strokes,
                         &s.doc.textures,
-                        st,
+                        &projected,
                         colour(s, st.swatch),
                         transform,
                     );
@@ -1458,9 +1509,11 @@ pub fn ui(
     }
     state.select.camera_space = !drawing_only;
     let navigating_now = navigating || response.drag_stopped_by(egui::PointerButton::Middle);
-    let warp_busy = !navigating_now
+    let tilt_busy = !navigating_now && tilt_controls(ui, rect, view.compose(layer_world), s);
+    let warp_busy = !tilt_busy
+        && !navigating_now
         && super::warp_edit::ui(ui, &response, &painter, s, &mut state.warp_edit, view);
-    let rig_busy = if !navigating_now && !drawing_only {
+    let rig_busy = if !tilt_busy && !navigating_now && !drawing_only {
         super::rig_edit::ui(ui, &response, &painter, s, &mut state.rig_edit, view)
     } else {
         super::rig_edit::finish(s, &mut state.rig_edit);
@@ -1469,6 +1522,7 @@ pub fn ui(
     if matches!(s.tool, Tool::Select | Tool::Transform)
         && !navigating_now
         && !warp_busy
+        && !tilt_busy
         && !rig_busy
     {
         select::ui(ui, &response, &painter, s, &mut state.select, view, &items);

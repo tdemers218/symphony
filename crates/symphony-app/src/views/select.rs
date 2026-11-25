@@ -211,7 +211,7 @@ fn draw_box(
 ) {
     let pts = corners(lo, hi).map(|c| pos(m.apply(c.0, c.1)));
     let outline = cut.map_or_else(
-        || pts.to_vec(),
+        || pts[..4].to_vec(),
         |points| points.iter().map(|&[x, y]| pos(m.apply(x, y))).collect(),
     );
     painter.add(egui::Shape::closed_line(
