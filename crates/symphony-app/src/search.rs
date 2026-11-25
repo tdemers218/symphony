@@ -24,6 +24,7 @@ pub enum Command {
     OpenExport(symphony_render::Format),
     Setting(Setting),
     GoToFrame(u32),
+    AddBookmark,
     SetZoom(f32),
     SetToolSize(f32),
     ToolSizeBy(f32),

@@ -9,10 +9,15 @@ use symphony_ui::{theme, widgets};
 
 use crate::keymap::{self, Action, Profile};
 use crate::session::{InsertExposure, Session};
-use symphony_core::graph::{NodeId, NodeKind};
+use symphony_core::{
+    doc::Bookmark,
+    graph::{NodeId, NodeKind},
+    id::Id,
+};
 
 #[derive(Default)]
 pub struct TimingState {
+    bookmark: Option<(String, bool, Bookmark)>,
     renaming: Option<(usize, String)>,
     menu_row: Option<usize>,
     /// The node a right-click menu is for (a layer's drawing node too).
@@ -31,6 +36,149 @@ pub struct TimingState {
     /// moved with when, so their row glows briefly.
     last_order: Vec<symphony_core::id::Id>,
     arrived: Vec<(symphony_core::id::Id, f64)>,
+}
+
+impl TimingState {
+    pub fn new_bookmark(&mut self, s: &Session) {
+        self.bookmark = Some((
+            s.key.clone(),
+            false,
+            Bookmark {
+                id: Id(0),
+                name: format!("Frame {}", s.frame),
+                start: s.frame,
+                end: s.frame,
+                colour: None,
+                notes: String::new(),
+            },
+        ));
+    }
+
+    pub fn bookmark_window(&mut self, ctx: &egui::Context, s: &mut Session) {
+        let Some((scene, existing, bookmark)) = &mut self.bookmark else {
+            return;
+        };
+        if scene != &s.key {
+            self.bookmark = None;
+            return;
+        }
+        let mut open = true;
+        let mut save = false;
+        let mut remove = false;
+        egui::Window::new(if *existing {
+            "Edit bookmark"
+        } else {
+            "Add bookmark"
+        })
+        .id(egui::Id::unique("timeline-bookmark"))
+        .collapsible(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut bookmark.name);
+            let max = s.length().max(bookmark.end).max(bookmark.start);
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut bookmark.start)
+                        .range(1..=max)
+                        .prefix("Start "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut bookmark.end)
+                        .range(bookmark.start..=max)
+                        .prefix("End "),
+                );
+            });
+            let mut custom = bookmark.colour.is_some();
+            if widgets::checkbox(ui, &mut custom, "Custom colour").changed() {
+                bookmark.colour = custom.then_some([125, 168, 224]);
+            }
+            if let Some(colour) = &mut bookmark.colour {
+                ui.color_edit_button_srgb(colour);
+            }
+            ui.label("Notes");
+            ui.text_edit_multiline(&mut bookmark.notes);
+            ui.horizontal(|ui| {
+                save =
+                    widgets::primary_button(ui, "Save bookmark", !bookmark.name.trim().is_empty())
+                        .clicked();
+                if *existing {
+                    remove = ui.button("Remove").clicked();
+                }
+            });
+        });
+        if save {
+            bookmark.name = bookmark.name.trim().to_owned();
+            bookmark.end = bookmark.end.max(bookmark.start);
+            s.save_bookmark(bookmark.clone());
+        } else if remove {
+            s.remove_bookmark(bookmark.id);
+        }
+        if save || remove || !open {
+            self.bookmark = None;
+        }
+    }
+}
+
+fn bookmark_menu(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState) {
+    ui.menu_button("Bookmarks", |ui| {
+        if ui.button("Add bookmark here").clicked() {
+            t.new_bookmark(s);
+            ui.close();
+        }
+        let length = s.length();
+        let previous = s
+            .doc
+            .bookmarks
+            .iter()
+            .rev()
+            .find(|bookmark| bookmark.start < s.frame)
+            .map(|bookmark| bookmark.start);
+        let next = s
+            .doc
+            .bookmarks
+            .iter()
+            .find(|bookmark| bookmark.start > s.frame && bookmark.start <= length)
+            .map(|bookmark| bookmark.start);
+        if !s.doc.bookmarks.is_empty() {
+            ui.horizontal(|ui| {
+                for (label, frame) in [("Previous", previous), ("Next", next)] {
+                    if ui
+                        .add_enabled(frame.is_some(), egui::Button::new(label))
+                        .clicked()
+                    {
+                        if let Some(frame) = frame {
+                            s.frame = frame.max(1);
+                        }
+                        ui.close();
+                    }
+                }
+            });
+            ui.separator();
+        }
+        egui::ScrollArea::vertical()
+            .max_height(244.0)
+            .show(ui, |ui| {
+                for bookmark in &s.doc.bookmarks {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                bookmark.start <= length,
+                                egui::Button::new(&bookmark.name),
+                            )
+                            .clicked()
+                        {
+                            s.frame = bookmark.start.max(1);
+                            ui.close();
+                        }
+                        if ui.small_button("Edit…").clicked() {
+                            t.bookmark = Some((s.key.clone(), true, bookmark.clone()));
+                            ui.close();
+                        }
+                    });
+                }
+            });
+    });
 }
 
 /// Width of the Timeline's Parameters field (the exposed drawing's name).
@@ -698,6 +846,7 @@ fn reveal_track(ui: &egui::Ui, row: Rect, reveal: bool) {
 
 pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile: Profile) {
     header(ui, s, profile);
+    bookmark_menu(ui, s, t);
     const HEAD: f32 = 176.0;
     const RULER: f32 = 28.0;
     let cw = theme::FRAME_CELL;
@@ -797,26 +946,90 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
         }
     }
     let width = HEAD + len as f32 * cw + 16.0;
+    let lane_height = if s.doc.bookmarks.iter().any(|bookmark| bookmark.start <= len) {
+        24.0
+    } else {
+        0.0
+    };
+    let header_height = RULER + lane_height;
 
     let out = egui::ScrollArea::both()
         .auto_shrink([false, false])
         .show_viewport(ui, |ui, scroll_viewport| {
             let size = Vec2::new(
                 width.max(ui.available_width()),
-                (RULER + track_count as f32 * rh + 8.0).max(ui.available_height()),
+                (header_height + track_count as f32 * rh + 8.0).max(ui.available_height()),
             );
             let (resp, viewport_painter) = ui.allocate_painter(size, Sense::click_and_drag());
             let o = resp.rect.min;
             let frame_x = |f: u32| o.x + HEAD + (f - 1) as f32 * cw;
-            let rows_bottom = o.y + RULER + track_count as f32 * rh;
+            let rows_bottom = o.y + header_height + track_count as f32 * rh;
             // The ruler shares the tracks' horizontal scroll origin.
             let viewport = ui.clip_rect();
-            let ruler_top = o.y + scroll_viewport.top().max(0.0);
+            let lane_top = o.y + scroll_viewport.top().max(0.0);
+            let ruler_top = lane_top + lane_height;
             let ruler_bottom = ruler_top + RULER;
             let ruler = viewport_painter.with_clip_rect(Rect::from_min_max(
                 Pos2::new(viewport.left(), ruler_top),
                 Pos2::new(viewport.right(), ruler_bottom),
             ));
+            if lane_height > 0.0 {
+                let lane = viewport_painter.with_clip_rect(Rect::from_min_max(
+                    Pos2::new(viewport.left(), lane_top),
+                    Pos2::new(viewport.right(), ruler_top),
+                ));
+                let mut jump = None;
+                for bookmark in s.doc.bookmarks.iter().filter(|entry| entry.start <= len) {
+                    let x = frame_x(bookmark.start.max(1));
+                    let available = viewport.right() - x;
+                    let span =
+                        (bookmark.end.min(len).saturating_sub(bookmark.start) + 1) as f32 * cw;
+                    let marker = Rect::from_min_size(
+                        Pos2::new(x, lane_top + 2.0),
+                        Vec2::new(span.max(68.0).min(available.max(0.0)), lane_height - 4.0),
+                    );
+                    let clipped = marker.intersect(lane.clip_rect());
+                    if !clipped.is_positive() {
+                        continue;
+                    }
+                    let colour = bookmark.colour.map_or(theme::ACCENT_SELECT, |[r, g, b]| {
+                        egui::Color32::from_rgb(r, g, b)
+                    });
+                    lane.rect_filled(marker, theme::RADIUS_CONTROL, theme::BG_RAISED);
+                    lane.rect_filled(
+                        Rect::from_min_size(marker.min, Vec2::new(3.0, marker.height())),
+                        1.0,
+                        colour,
+                    );
+                    widgets::fitted_text(
+                        ui,
+                        &lane,
+                        marker.left_center() + Vec2::new(7.0, 0.0),
+                        Align2::LEFT_CENTER,
+                        &bookmark.name,
+                        theme::dense(),
+                        theme::TEXT_PRIMARY,
+                        marker.width() - 10.0,
+                    );
+                    let response = ui.interact(
+                        clipped,
+                        resp.id.with(("bookmark", bookmark.id)),
+                        Sense::click(),
+                    );
+                    if response.clicked() {
+                        jump = Some(bookmark.start.max(1));
+                    }
+                    if response.double_clicked() {
+                        t.bookmark = Some((s.key.clone(), true, bookmark.clone()));
+                    }
+                    if !bookmark.notes.is_empty() {
+                        response.on_hover_text(&bookmark.notes);
+                    }
+                }
+                if let Some(frame) = jump {
+                    s.frame = frame;
+                }
+            }
             let track_clip = Rect::from_min_max(
                 Pos2::new(viewport.left(), ruler_bottom.min(viewport.bottom())),
                 viewport.max,
@@ -848,7 +1061,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                 if level > 0 {
                     let alpha = [0.0, 0.35, 0.6, 1.0][level];
                     painter.line_segment(
-                        [Pos2::new(x, o.y + RULER), Pos2::new(x, rows_bottom)],
+                        [Pos2::new(x, o.y + header_height), Pos2::new(x, rows_bottom)],
                         Stroke::new(1.0, theme::LINE_STRONG.gamma_multiply(alpha)),
                     );
                 }
@@ -880,7 +1093,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
             }
 
             for i in 0..rows {
-                let y = o.y + RULER + layer_slot[i] as f32 * rh;
+                let y = o.y + header_height + layer_slot[i] as f32 * rh;
                 let indent = layer_depth[i] as f32 * INDENT;
                 let node = s.doc.layers[i].node;
                 let sel = visible_node == Some(node);
@@ -1020,7 +1233,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
             let fps = s.doc.settings.fps.max(1.0);
             for (k, clip) in s.doc.sounds.iter().enumerate() {
                 // Right under the layers, where it's easy to see.
-                let y = o.y + RULER + sound_slot[k] as f32 * rh;
+                let y = o.y + header_height + sound_slot[k] as f32 * rh;
                 widgets::fitted_text(
                     ui,
                     &painter,
@@ -1069,7 +1282,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                 }
             }
             for (index, (node, name, frames)) in node_tracks.iter().enumerate() {
-                let y = o.y + RULER + node_slot[index] as f32 * rh;
+                let y = o.y + header_height + node_slot[index] as f32 * rh;
                 let indent = node_depth[index] as f32 * INDENT;
                 let row = Rect::from_min_size(
                     Pos2::new(o.x + 4.0, y + 1.0),
@@ -1118,7 +1331,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
             for (id, at) in &t.arrived {
                 if let Some(row) = order.iter().position(|c| c == id) {
                     let k = 1.0 - ((now - at) / 0.8) as f32;
-                    let y = o.y + RULER + layer_slot[row] as f32 * rh;
+                    let y = o.y + header_height + layer_slot[row] as f32 * rh;
                     painter.rect_filled(
                         Rect::from_min_size(
                             Pos2::new(o.x + 4.0, y + 1.0),
@@ -1148,11 +1361,14 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
             if resp.drag_started_by(egui::PointerButton::Primary) {
                 t.scrubbing = ui
                     .input(|i| i.pointer.press_origin())
-                    .is_some_and(|p| p.x >= o.x + HEAD && p.y >= o.y);
+                    .is_some_and(|p| p.x >= o.x + HEAD && p.y >= ruler_top);
             }
             let scrub = t.scrubbing && (resp.dragged() || resp.drag_stopped());
             if let Some(p) = resp.interact_pointer_pos().filter(|p| {
-                scrub || (resp.clicked_by(egui::PointerButton::Primary) && p.x >= o.x + HEAD)
+                scrub
+                    || (resp.clicked_by(egui::PointerButton::Primary)
+                        && p.x >= o.x + HEAD
+                        && p.y >= ruler_top)
             }) {
                 let frame =
                     (((p.x - o.x - HEAD) / cw).floor() as i64 + 1).clamp(1, i64::from(len)) as u32;
@@ -1202,7 +1418,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                 if p.y < ruler_bottom {
                     return None;
                 }
-                let r = ((p.y - o.y - RULER) / rh).floor();
+                let r = ((p.y - o.y - header_height) / rh).floor();
                 (r >= 0.0)
                     .then(|| layout.get(r as usize).map(|&(row, _)| row))
                     .flatten()
@@ -1227,7 +1443,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
             if let (Some(from), Some(p)) = (t.layer_drag, resp.interact_pointer_pos()) {
                 // The gap in the layer stack: layers whose row centre is
                 // above the pointer come before it.
-                let at = (p.y - o.y - RULER) / rh;
+                let at = (p.y - o.y - header_height) / rh;
                 let gap = (0..rows)
                     .filter(|&i| (layer_slot[i] as f32 + 0.5) < at)
                     .count();
@@ -1236,7 +1452,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                 } else {
                     layer_slot.iter().max().map_or(0, |m| m + 1)
                 };
-                let y = o.y + RULER + line_slot as f32 * rh;
+                let y = o.y + header_height + line_slot as f32 * rh;
                 painter.line_segment(
                     [Pos2::new(o.x + 8.0, y), Pos2::new(o.x + width - 8.0, y)],
                     Stroke::new(2.0, theme::ACCENT_SELECT),
@@ -1325,7 +1541,8 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
             }
 
             if let Some((row, _)) = t.renaming {
-                let y = o.y + RULER + layer_slot.get(row).copied().unwrap_or(row) as f32 * rh;
+                let y =
+                    o.y + header_height + layer_slot.get(row).copied().unwrap_or(row) as f32 * rh;
                 rename_field(
                     ui,
                     s,

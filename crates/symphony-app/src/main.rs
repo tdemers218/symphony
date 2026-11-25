@@ -2693,6 +2693,34 @@ impl SymphonyApp {
             );
         }
         let timing_views = [View::Timeline, View::Xsheet];
+        out.push(
+            Entry::new(
+                "Add timeline bookmark",
+                Kind::Action,
+                Command::AddBookmark,
+                "timeline.bookmark.add",
+            )
+            .words("frame marker range note")
+            .ctx(&timing_views),
+        );
+        for bookmark in self
+            .s
+            .doc
+            .bookmarks
+            .iter()
+            .filter(|bookmark| bookmark.start <= self.s.length())
+        {
+            out.push(
+                Entry::new(
+                    &format!("Bookmark: {}", bookmark.name),
+                    Kind::Go,
+                    Command::GoToFrame(bookmark.start),
+                    &format!("timeline.bookmark.{}", bookmark.id.0),
+                )
+                .words(&bookmark.notes)
+                .ctx(&timing_views),
+            );
+        }
         for action in views::timing::TimelineAction::ALL {
             let binding = if action == views::timing::TimelineAction::Extend {
                 Action::IncreaseExposure
@@ -3111,6 +3139,7 @@ impl SymphonyApp {
             Command::ReduceStrokePoints => self.s.reduce_points(),
             #[cfg(target_os = "macos")]
             Command::PickScreenColour => screen_colour::pick(ctx, self.s.key.clone()),
+            Command::AddBookmark => self.timing.new_bookmark(&self.s),
             Command::GoToFrame(f) => self.s.frame = f.clamp(1, self.s.length()),
             Command::SetZoom(z) => {
                 self.camera.set_zoom(z);
@@ -4726,6 +4755,7 @@ impl SymphonyApp {
         }
 
         self.search_box(&ctx);
+        self.timing.bookmark_window(&ctx, &mut self.s);
         self.workflow_windows(&ctx);
         self.dialogs(&ctx);
 

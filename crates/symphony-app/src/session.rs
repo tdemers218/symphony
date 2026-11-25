@@ -376,17 +376,25 @@ pub enum LineSculpt {
     #[default]
     Push,
     Smooth,
+    SmoothPressure,
     Thicken,
     Thin,
 }
 
 impl LineSculpt {
-    pub const ALL: [Self; 4] = [Self::Push, Self::Smooth, Self::Thicken, Self::Thin];
+    pub const ALL: [Self; 5] = [
+        Self::Push,
+        Self::Smooth,
+        Self::SmoothPressure,
+        Self::Thicken,
+        Self::Thin,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
             Self::Push => "Push lines",
             Self::Smooth => "Smooth lines",
+            Self::SmoothPressure => "Smooth line pressure",
             Self::Thicken => "Thicken lines",
             Self::Thin => "Thin lines",
         }
@@ -396,6 +404,7 @@ impl LineSculpt {
         match self {
             Self::Push => "line.sculpt.push",
             Self::Smooth => "line.sculpt.smooth",
+            Self::SmoothPressure => "line.sculpt.smooth-pressure",
             Self::Thicken => "line.sculpt.thicken",
             Self::Thin => "line.sculpt.thin",
         }
@@ -2370,6 +2379,43 @@ impl Session {
 
     /// Make room for new poses after the playhead, holding each visible
     /// exposure until the animator creates a new drawing in an inserted cell.
+    pub fn save_bookmark(&mut self, mut bookmark: symphony_core::doc::Bookmark) {
+        let before = self.doc.bookmarks.clone();
+        let mut after = before.clone();
+        if let Some(existing) = after.iter_mut().find(|entry| entry.id == bookmark.id) {
+            *existing = bookmark;
+        } else {
+            bookmark.id = self.doc.ids.fresh();
+            after.push(bookmark);
+        }
+        self.change_bookmarks(before, after);
+    }
+
+    pub fn remove_bookmark(&mut self, id: Id) {
+        let before = self.doc.bookmarks.clone();
+        let after = before
+            .iter()
+            .filter(|entry| entry.id != id)
+            .cloned()
+            .collect();
+        self.change_bookmarks(before, after);
+    }
+
+    fn change_bookmarks(
+        &mut self,
+        before: Vec<symphony_core::doc::Bookmark>,
+        mut after: Vec<symphony_core::doc::Bookmark>,
+    ) {
+        after.sort_by_key(|entry| (entry.start, entry.end, entry.id));
+        if before != after {
+            self.history.apply(
+                &mut self.doc,
+                "Edit bookmarks",
+                vec![Edit::SetBookmarks { before, after }],
+            );
+        }
+    }
+
     pub fn insert_inbetweens(&mut self, count: u32) {
         let before = self.length();
         if count == 0 || count > 100_000u32.saturating_sub(before) {
@@ -2391,6 +2437,24 @@ impl Session {
                     vec![held; count as usize],
                 ));
             }
+        }
+        if self
+            .doc
+            .bookmarks
+            .iter()
+            .any(|bookmark| bookmark.end >= from)
+        {
+            let before = self.doc.bookmarks.clone();
+            let mut after = before.clone();
+            for bookmark in &mut after {
+                if bookmark.start >= from {
+                    bookmark.start = bookmark.start.saturating_add(count);
+                }
+                if bookmark.end >= from {
+                    bookmark.end = bookmark.end.saturating_add(count);
+                }
+            }
+            edits.push(Edit::SetBookmarks { before, after });
         }
         let before_camera = &self.doc.camera_motion;
         let mut after_camera = before_camera.clone();
@@ -3289,6 +3353,14 @@ impl Session {
                             point.y += ((a.y + b.y) * 0.5 - point.y) * strength * 0.5;
                         }
                     }
+                    LineSculpt::SmoothPressure => {
+                        if index > 0 && index + 1 < stroke.points.len() {
+                            let average = (stroke.points[index - 1].pressure
+                                + stroke.points[index + 1].pressure)
+                                * 0.5;
+                            point.pressure += (average - point.pressure) * strength;
+                        }
+                    }
                     LineSculpt::Thicken => point.pressure = (point.pressure + strength).min(1.0),
                     LineSculpt::Thin => point.pressure = (point.pressure - strength).max(0.0),
                     LineSculpt::Push => {}
@@ -3680,6 +3752,29 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bookmarks_follow_scene_frame_insertions_and_undo() {
+        let mut s = Session::new_scene();
+        s.save_bookmark(symphony_core::doc::Bookmark {
+            id: Id(0),
+            name: "Beat".into(),
+            start: 2,
+            end: 8,
+            colour: None,
+            notes: "Hold".into(),
+        });
+        let original = s.doc.bookmarks[0].clone();
+        s.frame = 4;
+        s.insert_inbetweens(3);
+        assert_eq!((s.doc.bookmarks[0].start, s.doc.bookmarks[0].end), (2, 11));
+        s.undo();
+        assert_eq!(s.doc.bookmarks.as_slice(), std::slice::from_ref(&original));
+        s.remove_bookmark(original.id);
+        assert!(s.doc.bookmarks.is_empty());
+        s.undo();
+        assert_eq!(s.doc.bookmarks, [original]);
+    }
 
     #[test]
     fn thinning_keeps_the_path_and_undoes_as_one_gesture() {

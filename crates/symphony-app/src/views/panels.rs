@@ -911,10 +911,15 @@ fn tool_properties_body(
                 section(ui, "Line Editor");
                 use crate::session::LineSculpt;
                 let vertical = ui.available_width() < 244.0;
+                let mut mode = if s.line_sculpt == LineSculpt::SmoothPressure {
+                    LineSculpt::Smooth
+                } else {
+                    s.line_sculpt
+                };
                 if widgets::segmented(
                     ui,
                     "line-sculpt",
-                    &mut s.line_sculpt,
+                    &mut mode,
                     &[
                         (LineSculpt::Push, "Push"),
                         (LineSculpt::Smooth, "Smooth"),
@@ -923,7 +928,24 @@ fn tool_properties_body(
                     ],
                     vertical,
                 ) {
+                    s.line_sculpt = mode;
                     s.line_points.clear();
+                }
+
+                if matches!(
+                    s.line_sculpt,
+                    LineSculpt::Smooth | LineSculpt::SmoothPressure
+                ) {
+                    widgets::segmented(
+                        ui,
+                        "smooth-target",
+                        &mut s.line_sculpt,
+                        &[
+                            (LineSculpt::Smooth, "Path"),
+                            (LineSculpt::SmoothPressure, "Pressure"),
+                        ],
+                        false,
+                    );
                 }
 
                 size_slider(ui, "Radius", &mut s.line_edit_radius, 200.0);

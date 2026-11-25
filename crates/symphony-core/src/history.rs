@@ -159,6 +159,10 @@ pub enum Edit {
         before: u32,
         after: u32,
     },
+    SetBookmarks {
+        before: Vec<crate::doc::Bookmark>,
+        after: Vec<crate::doc::Bookmark>,
+    },
     AddLayer(Box<LayerSnapshot>),
     /// The camera frame's black bars, before and after.
     SetBars {
@@ -481,6 +485,9 @@ impl Edit {
             }
             Edit::SetLength { before, after } => {
                 s.settings.length = if forward { *after } else { *before }
+            }
+            Edit::SetBookmarks { before, after } => {
+                s.bookmarks.clone_from(if forward { after } else { before });
             }
             Edit::SetBars { before, after } => {
                 s.settings.bars = if forward { *after } else { *before };

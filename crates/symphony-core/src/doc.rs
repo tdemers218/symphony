@@ -189,6 +189,8 @@ pub struct Scene {
     /// Sound clips on the timeline, in the order they were added.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sounds: Vec<SoundClip>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bookmarks: Vec<Bookmark>,
     pub composite: NodeId,
     pub display: NodeId,
     #[serde(default = "default_camera_fov")]
@@ -215,6 +217,19 @@ pub struct Media {
     /// Length in seconds (sound).
     #[serde(default)]
     pub seconds: f32,
+}
+
+/// An inclusive, named anchor on the scene's timeline.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub id: Id,
+    pub name: String,
+    pub start: u32,
+    pub end: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
 }
 
 /// A sound placed on the timeline.
@@ -326,6 +341,7 @@ impl Scene {
             media: BTreeMap::new(),
             media_dirs: Vec::new(),
             sounds: Vec::new(),
+            bookmarks: Vec::new(),
             composite,
             display,
             camera_fov: default_camera_fov(),
