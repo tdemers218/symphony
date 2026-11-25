@@ -327,6 +327,14 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
     let rect = Rect::from_center_size(centre, Vec2::splat(94.0));
     let response = ui.interact(rect, ui.scope_id().with("peg-orientation"), Sense::drag());
     let drag_id = response.id.with("axis");
+    #[derive(Clone, Copy)]
+    struct RingDrag {
+        axis: usize,
+        origin: Pos2,
+        direction: Vec2,
+        angles: [f32; 2],
+        roll: f32,
+    }
 
     let rotate = |[x, y, z]: [f32; 3], pitch: f32, yaw: f32| {
         let (sx, cx) = pitch.to_radians().sin_cos();
@@ -340,9 +348,19 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         let xy = egui::emath::Rot2::from_angle(roll.to_radians()) * Vec2::new(x, y);
         rotate([xy.x, xy.y, z], pitch, yaw)
     };
-    let proximity = ui.ctx().pointer_hover_pos().map_or(0.0, |p| {
-        ((54.0 - p.distance(centre)) / 28.0).clamp(0.0, 1.0)
-    });
+    let held = response.dragged_by(egui::PointerButton::Primary)
+        && ui.data(|data| {
+            data.get_temp::<Option<RingDrag>>(drag_id)
+                .flatten()
+                .is_some()
+        });
+    let proximity = if held {
+        1.0
+    } else {
+        ui.ctx().pointer_hover_pos().map_or(0.0, |p| {
+            ((54.0 - p.distance(centre)) / 28.0).clamp(0.0, 1.0)
+        })
+    };
     let scale = 1.0 + 0.15 * proximity * proximity * (3.0 - 2.0 * proximity);
     let radius = 35.0 * scale;
     let ring_bases = |angles, roll| {
@@ -392,14 +410,6 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
     // Freeze the screen direction and starting orientation at the grab.
     // Re-inverting the projected ellipse as the mouse crosses its centre
     // or an edge-on ring can turn a few pixels into a half-turn.
-    #[derive(Clone, Copy)]
-    struct RingDrag {
-        axis: usize,
-        origin: Pos2,
-        direction: Vec2,
-        angles: [f32; 2],
-        roll: f32,
-    }
     if response.drag_started_by(egui::PointerButton::Primary) {
         let drag = ui
             .input(|input| input.pointer.press_origin())
@@ -1406,6 +1416,15 @@ pub fn ui(
     state.last_rect = Some(rect);
     let px = 1.0 / scale_of(view).max(1e-6);
 
+    let aligning = s.onion.alignment_edit.is_some();
+    let navigating_now =
+        aligning || navigating || response.drag_stopped_by(egui::PointerButton::Middle);
+    let (tilt_busy, tilt_overlay) = if navigating_now {
+        (false, Vec::new())
+    } else {
+        tilt_controls(ui, rect, s)
+    };
+
     let show_surround = drawing_only || s.doc.settings.bars.is_off();
     // D4.2: neutral surround. D3.10: the stage is paper with a soft shadow.
     let colours = s.colours;
@@ -1449,17 +1468,27 @@ pub fn ui(
     };
 
     // Use the same depth projection as the rendered stage for ink and hit tests.
+    // Drawing tools work in local coordinates. Transform previews the same
+    // peg orientation that Camera uses without applying camera framing.
+    let drawing_peg = (drawing_only && s.tool == Tool::Transform)
+        .then(|| s.transform_peg(s.selected))
+        .flatten()
+        .filter(|peg| peg.tilt_enabled);
     let projected_layer = if drawing_only {
-        Some(Affine::IDENTITY)
+        Some(drawing_peg.map_or(Affine::IDENTITY, |peg| peg.transform_at(s.frame)))
     } else {
         s.doc
             .layers
             .get(s.selected)
             .and_then(|layer| s.doc.camera_transform(layer.node, s.frame))
     };
+    let drawing_front = drawing_peg.filter(|peg| peg.face_camera).map(|peg| {
+        let mut front = peg.clone();
+        front.tilt_enabled = false;
+        front.transform_at(s.frame)
+    });
     let layer_world = projected_layer.unwrap_or(Affine::IDENTITY);
 
-    let aligning = s.onion.alignment_edit.is_some();
     edit_onion_skin(ui, &response, s, view.compose(layer_world), navigating);
 
     // Onion skin: neighbouring drawings of the selected layer, tinted.
@@ -1555,10 +1584,13 @@ pub fn ui(
     // (drawing, its warp, projection for both vector and raster artwork)
     let mut warps: Vec<(Id, std::sync::Arc<symphony_core::warp::Warp>, Affine)> = Vec::new();
     let mut facing_planes = Vec::new();
+    if let Some(front) = drawing_front {
+        facing_planes.push((s.selected, front));
+    }
     let items: Vec<select::Item> = if drawing_only {
         s.doc
             .exposed(s.selected, s.frame)
-            .map(|d| vec![(s.selected, d, Affine::IDENTITY)])
+            .map(|d| vec![(s.selected, d, layer_world)])
             .unwrap_or_default()
     } else {
         camera_commands
@@ -1784,13 +1816,6 @@ pub fn ui(
         super::rig_edit::draw_rest_guide(&painter, s, view);
     }
     state.select.camera_space = !drawing_only;
-    let navigating_now =
-        aligning || navigating || response.drag_stopped_by(egui::PointerButton::Middle);
-    let (tilt_busy, tilt_overlay) = if navigating_now {
-        (false, Vec::new())
-    } else {
-        tilt_controls(ui, rect, s)
-    };
     let warp_busy = !tilt_busy
         && !navigating_now
         && super::warp_edit::ui(ui, &response, &painter, s, &mut state.warp_edit, view);
