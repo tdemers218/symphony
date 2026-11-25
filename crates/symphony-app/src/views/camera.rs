@@ -340,11 +340,16 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         let xy = egui::emath::Rot2::from_angle(roll.to_radians()) * Vec2::new(x, y);
         rotate([xy.x, xy.y, z], pitch, yaw)
     };
+    let proximity = ui.ctx().pointer_hover_pos().map_or(0.0, |p| {
+        ((54.0 - p.distance(centre)) / 28.0).clamp(0.0, 1.0)
+    });
+    let scale = 1.0 + 0.15 * proximity * proximity * (3.0 - 2.0 * proximity);
+    let radius = 35.0 * scale;
     let ring_bases = |angles, roll| {
         [
-            [[0.0, 35.0, 0.0], [0.0, 0.0, 35.0]],
-            [[0.0, 0.0, 35.0], [35.0, 0.0, 0.0]],
-            [[35.0, 0.0, 0.0], [0.0, 35.0, 0.0]],
+            [[0.0, radius, 0.0], [0.0, 0.0, radius]],
+            [[0.0, 0.0, radius], [radius, 0.0, 0.0]],
+            [[radius, 0.0, 0.0], [0.0, radius, 0.0]],
         ]
         .map(|basis| basis.map(|p| view(orient(p, angles, roll))))
     };
@@ -384,11 +389,10 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
             .map(|(axis, _)| axis)
     };
     let hover = ui.ctx().pointer_hover_pos().and_then(nearest);
-    if response.drag_started() {
+    if response.drag_started_by(egui::PointerButton::Primary) {
         let axis = ui
             .input(|input| input.pointer.press_origin())
-            .and_then(nearest)
-            .or(hover);
+            .and_then(nearest);
         ui.data_mut(|data| data.insert_temp(drag_id, axis));
     }
     let active = ui
@@ -418,7 +422,7 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
             let a = Vec2::new(ax, ay);
             let b = Vec2::new(bx, by);
             let tangent = if a.length_sq() > b.length_sq() { -a } else { b };
-            (delta.dot(tangent.normalized()) / 35.0).to_degrees()
+            (delta.dot(tangent.normalized()) / radius).to_degrees()
         };
         if rotation != 0.0 {
             let (sin, cos) = rotation.to_radians().sin_cos();
@@ -486,8 +490,18 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
     let ring_shapes = |front: bool| {
         rings.iter().enumerate().map(move |(axis, ring)| {
             let highlighted = active.or(hover) == Some(axis);
-            let colour =
-                colours[axis].gamma_multiply(if front || highlighted { 1.0 } else { 0.35 });
+            let opacity = if active.is_some_and(|held| held != axis) {
+                if front {
+                    0.23
+                } else {
+                    0.10
+                }
+            } else if front || highlighted {
+                1.0
+            } else {
+                0.35
+            };
+            let colour = colours[axis].gamma_multiply(opacity);
             Shape::line(
                 ring[usize::from(!front)].clone(),
                 EStroke::new(if highlighted { 2.7 } else { 1.7 }, colour),
@@ -504,10 +518,7 @@ fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec
         ),
     ];
     shapes.extend(ring_shapes(false));
-    let proximity = ui.ctx().pointer_hover_pos().map_or(0.0, |p| {
-        ((54.0 - p.distance(centre)) / 28.0).clamp(0.0, 1.0)
-    });
-    let half_size = 16.0 + 2.4 * proximity * proximity * (3.0 - 2.0 * proximity);
+    let half_size = 16.0 * scale;
     let cube = std::array::from_fn::<_, 8, _>(|i| {
         let point = [1, 2, 4].map(|bit| if i & bit == 0 { -half_size } else { half_size });
         let [x, y, z] = view(orient(point, angles, roll));
