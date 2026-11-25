@@ -2078,6 +2078,37 @@ impl Session {
         }
     }
 
+    pub fn set_selected_peg_tilt(&mut self, enabled: bool, angles: [f32; 2]) {
+        if self
+            .doc
+            .column(self.selected)
+            .is_some_and(|column| column.locked)
+        {
+            return;
+        }
+        let Some(id) = self.transform_peg_id(self.selected) else {
+            return;
+        };
+        let Some(mut peg) = self.transform_peg(self.selected).cloned() else {
+            return;
+        };
+        peg.tilt_enabled = enabled;
+        if enabled {
+            let tilt = peg
+                .tilt
+                .get_or_insert_with(|| Box::new([Value::default(), Value::default()]));
+            for (value, angle) in tilt.iter_mut().zip(angles) {
+                if value.at(self.frame) != angle {
+                    match value {
+                        Value::Constant(current) if !self.animate => *current = angle,
+                        _ => value.set_key(self.frame, angle),
+                    }
+                }
+            }
+        }
+        self.set_peg_by_id(id, peg);
+    }
+
     // ---- Transform tool (layers, through their pegs) ----------------------
 
     /// Change the selected layer's peg in one gesture step. In Animate mode
@@ -2524,6 +2555,7 @@ impl Session {
                         .into_iter()
                         .chain(peg.scale_x.iter_mut())
                         .chain(peg.scale_y.iter_mut())
+                        .chain(peg.tilt.iter_mut().flat_map(|angles| angles.iter_mut()))
                     {
                         shift(value);
                     }

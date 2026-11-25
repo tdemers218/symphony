@@ -13,14 +13,14 @@ pub fn ui(ui: &mut egui::Ui, s: &mut Session, node_view: &mut NodeViewState) {
     let maintain_id = ui.scope_id().with("maintain-size");
     let mut maintain_size = ui.data(|data| data.get_temp(maintain_id)).unwrap_or(true);
     let mode_id = ui.scope_id().with("stage-view");
-    let mut orbit_mode = ui.data(|data| data.get_temp(mode_id)).unwrap_or(true);
+    let mut orbit_mode = ui.data(|data| data.get_temp(mode_id)).unwrap_or(false);
     let orbit_id = ui.scope_id().with("stage-orbit");
     ui.horizontal_wrapped(|ui| {
         if symphony_ui::widgets::segmented(
             ui,
             "stage-mode",
             &mut orbit_mode,
-            &[(true, "3D"), (false, "Side")],
+            &[(false, "2D"), (true, "3D")],
             false,
         ) {
             ui.data_mut(|data| data.insert_temp(mode_id, orbit_mode));
@@ -73,6 +73,13 @@ pub fn ui(ui: &mut egui::Ui, s: &mut Session, node_view: &mut NodeViewState) {
         theme::GLASS_RADIUS.saturating_sub(4),
         theme::BG_INPUT,
     );
+    let navigation_drag = response.dragged_by(egui::PointerButton::Middle)
+        || response.dragged_by(egui::PointerButton::Secondary);
+    let wheel = response.hovered() && ui.input(|i| i.smooth_scroll_delta.y != 0.0);
+    if !orbit_mode && (navigation_drag || wheel) {
+        ui.data_mut(|data| data.insert_temp(mode_id, true));
+        orbit_mode = true;
+    }
     if orbit_mode {
         orbit_stage(ui, &response, &painter, s, orbit_id);
         return;
@@ -177,6 +184,16 @@ pub fn ui(ui: &mut egui::Ui, s: &mut Session, node_view: &mut NodeViewState) {
                 hit = Some((index, gap));
             }
         }
+    }
+    if response.drag_started_by(egui::PointerButton::Primary) && hit.is_none() {
+        ui.data_mut(|data| data.insert_temp(mode_id, true));
+        painter.rect_filled(
+            viewport,
+            theme::GLASS_RADIUS.saturating_sub(4),
+            theme::BG_INPUT,
+        );
+        orbit_stage(ui, &response, &painter, s, orbit_id);
+        return;
     }
     if response.clicked() || response.drag_started() {
         if let Some((index, _)) = hit {
@@ -298,7 +315,9 @@ fn orbit_stage(
         || response.dragged_by(egui::PointerButton::Primary) && ui.input(|i| i.modifiers.shift)
     {
         orbit.pan += response.drag_delta();
-    } else if response.dragged_by(egui::PointerButton::Primary) {
+    } else if response.dragged_by(egui::PointerButton::Primary)
+        || response.dragged_by(egui::PointerButton::Secondary)
+    {
         let delta = response.drag_delta();
         orbit.yaw = (orbit.yaw + delta.x * 0.008).rem_euclid(std::f32::consts::TAU);
         orbit.pitch = (orbit.pitch + delta.y * 0.008).clamp(-1.5, 1.5);
@@ -374,12 +393,8 @@ fn orbit_stage(
     let mut planes: Vec<_> = planes
         .into_iter()
         .map(|(index, pose)| {
-            let points = stage.map(|[x, y]| {
-                let (x, y) = pose.transform.apply(x * width, y * height);
-                [x, y, pose.depth]
-            });
-            let (x, y) = pose.transform.apply(0.0, 0.0);
-            let (centre, depth) = projection.project([x, y, pose.depth]);
+            let points = stage.map(|[x, y]| pose.point_at(x * width, y * height));
+            let (centre, depth) = projection.project(pose.point_at(0.0, 0.0));
             (index, points.map(project), centre, depth, pose.depth)
         })
         .collect();
@@ -433,7 +448,7 @@ fn orbit_stage(
     painter.text(
         rect.left_bottom() + Vec2::new(12.0, -10.0),
         Align2::LEFT_BOTTOM,
-        "Drag to orbit  ·  Shift-drag or middle-drag to pan  ·  Scroll to zoom",
+        "Left or right drag to orbit  ·  Middle-drag to pan  ·  Scroll to zoom",
         theme::dense(),
         theme::TEXT_SECONDARY,
     );

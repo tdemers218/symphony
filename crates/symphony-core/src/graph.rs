@@ -27,6 +27,10 @@ pub struct PegParams {
     #[serde(default)]
     pub z: Value,
     pub rotation: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tilt: Option<Box<[Value; 2]>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tilt_enabled: bool,
     pub scale_x: Option<Value>,
     pub scale_y: Option<Value>,
     pub pivot: (f32, f32),
@@ -34,6 +38,10 @@ pub struct PegParams {
 
 impl PegParams {
     pub fn transform_at(&self, frame: u32) -> Affine {
+        self.stage_transform(frame).transform
+    }
+
+    fn flat_transform_at(&self, frame: u32) -> Affine {
         let sx = self.scale_x.as_ref().map_or(1.0, |v| v.at(frame));
         let sy = self.scale_y.as_ref().map_or(1.0, |v| v.at(frame));
         let (px, py) = self.pivot;
@@ -42,6 +50,38 @@ impl PegParams {
             .compose(Affine::rotate_deg(self.rotation.at(frame)))
             .compose(Affine::scale(sx, sy))
             .compose(Affine::translate(-px, -py))
+    }
+
+    fn stage_transform(&self, frame: u32) -> StagePose {
+        let base = self.flat_transform_at(frame);
+        let z = self.z.at(frame);
+        let Some(angles) = self.tilt.as_ref().filter(|_| self.tilt_enabled) else {
+            return StagePose::from_rows([
+                [base.a, base.c, 0.0, base.tx],
+                [base.b, base.d, 0.0, base.ty],
+                [0.0, 0.0, 1.0, z],
+            ]);
+        };
+        let angle = |v: &Value| {
+            let value = v.at(frame);
+            if value.is_finite() {
+                value.to_radians()
+            } else {
+                0.0
+            }
+        };
+        let (sx, cx) = angle(&angles[0]).sin_cos();
+        let (sy, cy) = angle(&angles[1]).sin_cos();
+        let (px, py) = base.apply(self.pivot.0, self.pivot.1);
+        let rotate = |x: f32, y: f32| [cy * x + sy * sx * y, cx * y, -sy * x + cy * sx * y];
+        let a = rotate(base.a, base.b);
+        let b = rotate(base.c, base.d);
+        let t = rotate(base.tx - px, base.ty - py);
+        StagePose::from_rows([
+            [a[0], b[0], sy * cx, t[0] + px],
+            [a[1], b[1], -sx, t[1] + py],
+            [a[2], b[2], cy * cx, t[2] + z],
+        ])
     }
 
     /// Does any parameter have a key on `frame`?
@@ -56,6 +96,7 @@ impl PegParams {
         ]
         .into_iter()
         .flatten()
+        .chain(self.tilt.iter().flat_map(|angles| angles.iter()))
         .any(|v| v.has_key(frame))
     }
 }
@@ -382,19 +423,51 @@ pub struct Graph {
     matte_drawings: std::collections::BTreeSet<NodeId>,
 }
 
-/// Camera-facing artwork keeps a 2D transform and a separate depth.
+/// Spatial pose of a drawing plane and its affine projection onto XY.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StagePose {
     pub transform: Affine,
     pub depth: f32,
+    rows: [[f32; 4]; 3],
+}
+
+impl StagePose {
+    fn from_rows(rows: [[f32; 4]; 3]) -> Self {
+        let [[a, c, _, tx], [b, d, _, ty], [_, _, _, depth]] = rows;
+        Self {
+            transform: Affine { a, b, c, d, tx, ty },
+            depth,
+            rows,
+        }
+    }
+
+    fn compose(self, rhs: Self) -> Self {
+        Self::from_rows(self.rows.map(|row| {
+            std::array::from_fn(|column| {
+                let projected = row[0] * rhs.rows[0][column]
+                    + row[1] * rhs.rows[1][column]
+                    + row[2] * rhs.rows[2][column];
+                if column == 3 {
+                    projected + row[3]
+                } else {
+                    projected
+                }
+            })
+        }))
+    }
+
+    pub fn point_at(self, x: f32, y: f32) -> [f32; 3] {
+        self.rows.map(|row| row[0] * x + row[1] * y + row[3])
+    }
 }
 
 impl Default for StagePose {
     fn default() -> Self {
-        Self {
-            transform: Affine::IDENTITY,
-            depth: 0.0,
-        }
+        Self::from_rows([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ])
     }
 }
 
@@ -1293,10 +1366,7 @@ impl Graph {
                     .sample_key(id, frame)
                     .map_or(node.enabled, |key| key.enabled) =>
             {
-                StagePose {
-                    transform: parent.transform.compose(p.transform_at(frame)),
-                    depth: parent.depth + p.z.at(frame),
-                }
+                parent.compose(p.stage_transform(frame))
             }
             _ => parent,
         })
@@ -1307,6 +1377,36 @@ impl Graph {
 mod tests {
     use super::*;
     use crate::xsheet::Column;
+
+    #[test]
+    fn tilted_peg_has_spatial_depth_and_retains_its_pivot() {
+        let mut graph = Graph::default();
+        let mut peg = PegParams {
+            x: Value::Constant(15.0),
+            z: Value::Constant(30.0),
+            pivot: (2.0, 0.0),
+            tilt_enabled: true,
+            tilt: Some(Box::new([Value::Constant(0.0), Value::Constant(60.0)])),
+            ..Default::default()
+        };
+        let mut angle = peg.tilt.as_ref().unwrap()[1].clone();
+        angle.set_key(1, 60.0);
+        angle.set_key(12, 0.0);
+        peg.tilt.as_mut().unwrap()[1] = angle;
+        let id = graph.add("Tilt", NodeKind::Peg(peg));
+        let drawing = graph.add("Drawing", NodeKind::Drawing { column: Id(1) });
+        graph.connect(id, drawing, 0);
+        assert!(graph.has_key(id, 1));
+        let pose = graph.world_pose(drawing, 1).unwrap();
+        let pivot = pose.point_at(2.0, 0.0);
+        let end = pose.point_at(12.0, 0.0);
+        assert!((pivot[0] - 17.0).abs() < 1e-4 && (pivot[2] - 30.0).abs() < 1e-4);
+        assert!((end[0] - 22.0).abs() < 1e-4 && end[2] < 22.0);
+        assert_eq!(
+            graph.world_pose(drawing, 12).unwrap().point_at(12.0, 0.0),
+            [27.0, 0.0, 30.0]
+        );
+    }
 
     #[test]
     fn blur_reads_legacy_box_settings_and_holds_modes_at_keys() {

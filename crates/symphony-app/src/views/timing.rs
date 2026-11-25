@@ -876,6 +876,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                     .into_iter()
                     .chain(peg.scale_x.iter())
                     .chain(peg.scale_y.iter())
+                    .chain(peg.tilt.iter().flat_map(|angles| angles.iter()))
                 {
                     frames.extend(value.keys().iter().map(|key| key.frame));
                 }

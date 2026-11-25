@@ -2427,6 +2427,7 @@ fn apply_properties(s: &mut Session, draft: &mut PropertyDraft, key: bool, delet
                 .into_iter()
                 .chain(peg.scale_x.iter_mut())
                 .chain(peg.scale_y.iter_mut())
+                .chain(peg.tilt.iter_mut().flat_map(|angles| angles.iter_mut()))
             {
                 if delete {
                     value.remove_key(s.frame);

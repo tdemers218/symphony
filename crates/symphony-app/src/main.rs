@@ -2828,9 +2828,14 @@ impl SymphonyApp {
         }
         // Views: bring a tab to the front.
         for v in View::ALL {
+            let title = if v == View::Multiplane {
+                v.title().to_owned()
+            } else {
+                format!("{} view", v.title())
+            };
             out.push(
                 Entry::new(
-                    &format!("{} view", v.title()),
+                    &title,
                     Kind::View,
                     Command::ShowView(v),
                     &format!("view.show.{v:?}"),

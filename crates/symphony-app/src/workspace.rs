@@ -50,7 +50,7 @@ impl View {
             View::Timeline => "Timeline",
             View::Xsheet => "Xsheet",
             View::Node => "Node",
-            View::Multiplane => "Multiplane",
+            View::Multiplane => "3D View",
             View::ToolProperties => "Tool Properties",
             View::Colour => "Colour",
             View::LayerProperties => "Node Properties",

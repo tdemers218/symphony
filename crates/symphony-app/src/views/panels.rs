@@ -701,6 +701,46 @@ pub fn undo_history(ui: &mut egui::Ui, s: &mut Session) {
     }
 }
 
+pub(super) fn rotation_3d(ui: &mut egui::Ui, s: &mut Session) {
+    let Some(peg) = s.transform_peg(s.selected) else {
+        return;
+    };
+    let mut enabled = peg.tilt_enabled;
+    let mut angles = peg
+        .tilt
+        .as_ref()
+        .map_or([0.0; 2], |tilt| [tilt[0].at(s.frame), tilt[1].at(s.frame)]);
+    let lock = s.doc.column(s.selected).is_some_and(|column| column.locked);
+    ui.add_enabled_ui(!lock, |ui| {
+        if widgets::checkbox(ui, &mut enabled, "3D rotation").changed() {
+            s.set_selected_peg_tilt(enabled, angles);
+            s.end_gesture();
+        }
+        if enabled {
+            ui.horizontal_wrapped(|ui| {
+                for (axis, label) in ["X ", "Y "].into_iter().enumerate() {
+                    let response = ui.add(
+                        egui::DragValue::new(&mut angles[axis])
+                            .prefix(label)
+                            .suffix("°")
+                            .range(-180.0..=180.0),
+                    );
+                    if response.changed() {
+                        s.set_selected_peg_tilt(true, angles);
+                    }
+                    if response.drag_stopped() || response.lost_focus() {
+                        s.end_gesture();
+                    }
+                }
+            });
+        }
+    });
+    hint(
+        ui,
+        "Rotates the drawing plane. To move it in depth, use 3D View.",
+    );
+}
+
 pub fn tool_properties(
     ui: &mut egui::Ui,
     s: &mut Session,
@@ -801,6 +841,10 @@ fn tool_properties_body(
                     widgets::checkbox(ui, &mut s.cutter_mode, "Cutter")
                         .on_hover_text("Draw a selection boundary to split the artwork and select the pieces inside.");
                     widgets::checkbox(ui, &mut s.show_selected_points, "Show selected points");
+                }
+
+                if !select || !s.selection.strokes.is_empty() {
+                    rotation_3d(ui, s);
                 }
 
                 widgets::segmented(
