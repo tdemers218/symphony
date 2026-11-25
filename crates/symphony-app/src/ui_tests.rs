@@ -2471,37 +2471,77 @@ fn smart_rig_drags_and_anchor_keys() {
 }
 
 #[test]
-fn tool_flyout_opens_on_hover_and_selects_a_mode() {
+fn tool_flyout_switches_anchors_and_selects_a_mode() {
     use egui_kittest::kittest::Queryable;
     use symphony_ui::icons::{self, Icon};
 
     let mut harness = Harness::builder()
         .with_size(Vec2::new(520.0, 320.0))
         .build_ui_state(
-            |ui, (anchor, selected): &mut (Pos2, Option<usize>)| {
-                let button = icons::tool_button(ui, Icon::Select, true, true, "Select tool");
-                *anchor = button.rect.center();
-                if let Some(choice) = crate::tool_flyout(
+            |ui, (anchors, selected): &mut ([Pos2; 2], Option<usize>)| {
+                let select = icons::tool_button(ui, Icon::Select, true, true, "Select tool");
+                let brush = icons::tool_button(ui, Icon::Brush, false, true, "Brush tool");
+                *anchors = [select.rect.center(), brush.rect.center()];
+                if let Some((_, choice)) = crate::tool_flyout(
                     ui,
-                    &button,
                     &[
-                        (Icon::Select, "Selection", true),
-                        (Icon::Cutter, "Cutter", false),
+                        (
+                            select,
+                            vec![
+                                (Icon::Select, "Selection", true),
+                                (Icon::Cutter, "Cutter", false),
+                            ],
+                        ),
+                        (
+                            brush,
+                            vec![
+                                (Icon::Pen, "Vector brush", true),
+                                (Icon::Pencil, "Pencil", false),
+                            ],
+                        ),
                     ],
                 ) {
                     *selected = Some(choice);
                 }
             },
-            (Pos2::ZERO, None),
+            ([Pos2::ZERO; 2], None),
         );
     harness.run_steps(2);
-    let at = harness.state().0;
+    for (index, visible, hidden) in [(0, "Cutter", "Pencil"), (1, "Pencil", "Cutter")] {
+        let at = harness.state().0[index];
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(at));
+        harness.run_steps(25);
+        assert!(harness.query_by_label(visible).is_some());
+        assert!(harness.query_by_label(hidden).is_none());
+    }
+    harness.get_by_label("Pencil").click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().1, Some(1));
+
+    // The press starts on the toolbar, then release targets the whole variant row.
+    let at = harness.state().0[0];
+    let target = at + Vec2::new(86.0, 31.0);
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness.state_mut().1 = None;
     harness
         .input_mut()
         .events
-        .push(egui::Event::PointerMoved(at));
-    harness.run_steps(25);
-    harness.get_by_label("Cutter").click();
+        .extend([egui::Event::PointerMoved(at), button(at, true)]);
+    harness.step();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(target));
+    harness.run_steps(2);
+    harness.input_mut().events.push(button(target, false));
     harness.run_steps(2);
     assert_eq!(harness.state().1, Some(1));
 }

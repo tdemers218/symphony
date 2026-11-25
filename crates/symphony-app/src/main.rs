@@ -572,96 +572,167 @@ fn tool_icon(t: Tool) -> Icon {
     }
 }
 
+type ToolVariant = (Icon, &'static str, bool);
+
+#[derive(Clone, Default)]
+struct ToolFlyout {
+    hovered: Option<(egui::Id, f64)>,
+    open: Option<egui::Id>,
+    dragging: bool,
+}
+
 fn tool_flyout(
     ui: &egui::Ui,
-    button: &egui::Response,
-    modes: &[(Icon, &str, bool)],
-) -> Option<usize> {
-    if modes.is_empty() {
-        return None;
-    }
-    let id = button.id.with("tool-modes");
-    let mut hover_since = ui.data(|data| data.get_temp::<Option<f64>>(id).flatten());
-    let mut drag_open = ui
-        .data(|data| data.get_temp::<bool>(id.with("drag")))
-        .unwrap_or(false);
-    let (now, pointer, released) = ui.input(|input| {
+    anchors: &[(egui::Response, Vec<ToolVariant>)],
+) -> Option<(egui::Id, usize)> {
+    let id = ui.scope_id().with("tool-flyout");
+    let mut state = ui
+        .data(|data| data.get_temp::<ToolFlyout>(id))
+        .unwrap_or_default();
+    let (now, pointer, pressed, released, down, escape) = ui.input(|input| {
         (
             input.time,
             input.pointer.hover_pos(),
+            input.pointer.button_pressed(egui::PointerButton::Primary),
             input.pointer.button_released(egui::PointerButton::Primary),
+            input.pointer.primary_down(),
+            input.key_pressed(egui::Key::Escape),
         )
     });
-    let screen = ui.ctx().content_rect();
-    let size = egui::vec2(154.0, 10.0 + modes.len() as f32 * 29.0);
-    let mut at = if ui.layout().is_horizontal() {
-        egui::pos2(button.rect.left(), button.rect.bottom() + 2.0)
-    } else {
-        egui::pos2(button.rect.right() + 2.0, button.rect.top())
-    };
-    if at.x + size.x > screen.right() && !ui.layout().is_horizontal() {
-        at.x = button.rect.left() - size.x - 2.0;
-    }
-    if at.y + size.y > screen.bottom() && ui.layout().is_horizontal() {
-        at.y = button.rect.top() - size.y - 2.0;
-    }
-    at.x =
-        at.x.clamp(screen.left(), (screen.right() - size.x).max(screen.left()));
-    at.y =
-        at.y.clamp(screen.top(), (screen.bottom() - size.y).max(screen.top()));
-    let region = button
-        .rect
-        .union(egui::Rect::from_min_size(at, size))
-        .expand(8.0);
-    let down_here = button.is_pointer_button_down_on();
-    drag_open |=
-        button.drag_started() || down_here && pointer.is_some_and(|p| !button.rect.contains(p));
-    let delay = 0.28;
-    if button.contains_pointer() {
-        let started = *hover_since.get_or_insert(now);
-        if now - started < delay {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_secs_f64(delay - (now - started)));
-        }
-    } else if !pointer.is_some_and(|p| region.contains(p)) {
-        hover_since = None;
-    }
-    let mut choice = None;
-    if drag_open || hover_since.is_some_and(|started| now - started >= delay) {
-        egui::Area::new(id)
-            .order(egui::Order::Foreground)
-            .fixed_pos(at)
-            .show(ui.ctx(), |ui| {
-                theme::glass_window_frame(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(138.0);
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    for (index, &(icon, label, active)) in modes.iter().enumerate() {
-                        let row = ui.horizontal(|ui| {
-                            let icon = icons::button(ui, icon, active, true, "");
-                            let name = ui.selectable_label(active, label);
-                            icon.clicked() || name.clicked()
-                        });
-                        if row.inner
-                            || drag_open
-                                && released
-                                && pointer.is_some_and(|p| row.response.rect.contains(p))
-                        {
-                            choice = Some(index);
-                        }
-                    }
-                });
+    const DELAY: f64 = 0.28;
+    if let Some((button, _)) = anchors.iter().find(|(button, _)| button.drag_started()) {
+        state.open = Some(button.id);
+        state.dragging = true;
+    } else if !state.dragging {
+        state.hovered = anchors
+            .iter()
+            .find(|(button, _)| button.contains_pointer())
+            .map(|(button, _)| {
+                state
+                    .hovered
+                    .filter(|(id, _)| *id == button.id)
+                    .unwrap_or((button.id, now))
             });
+        if let Some((anchor, started)) = state.hovered {
+            let remaining = DELAY - (now - started);
+            if remaining <= 0.0 {
+                state.open = Some(anchor);
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+            }
+        }
     }
-    if released || !ui.input(|input| input.pointer.primary_down()) {
-        drag_open = false;
+
+    let mut choice = None;
+    if let Some((button, modes)) = anchors
+        .iter()
+        .find(|(button, _)| Some(button.id) == state.open)
+    {
+        let horizontal = ui.layout().is_horizontal();
+        let screen = ui.ctx().content_rect();
+        let size = egui::vec2(158.0, 12.0 + modes.len() as f32 * 28.0);
+        let mut at = if horizontal {
+            egui::pos2(button.rect.left(), button.rect.bottom() + 2.0)
+        } else {
+            egui::pos2(button.rect.right() + 2.0, button.rect.top())
+        };
+        if !horizontal && at.x + size.x > screen.right() {
+            at.x = button.rect.left() - size.x - 2.0;
+        }
+        if horizontal && at.y + size.y > screen.bottom() {
+            at.y = button.rect.top() - size.y - 2.0;
+        }
+        at.x =
+            at.x.clamp(screen.left(), (screen.right() - size.x).max(screen.left()));
+        at.y =
+            at.y.clamp(screen.top(), (screen.bottom() - size.y).max(screen.top()));
+        let popup = egui::Rect::from_min_size(at, size);
+        let corridor = popup.union(button.rect).expand(5.0);
+        let over_other = state
+            .hovered
+            .is_some_and(|(hovered, _)| hovered != button.id);
+        if escape
+            || !state.dragging
+                && (over_other
+                    || !pointer.is_some_and(|p| corridor.contains(p))
+                    || pressed
+                        && !pointer.is_some_and(|p| popup.contains(p) || button.rect.contains(p)))
+        {
+            state.open = None;
+            state.dragging = false;
+            if escape {
+                state.hovered = None;
+            }
+        } else {
+            egui::Area::new(id.with("panel"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(at)
+                .movable(false)
+                .show(ui.ctx(), |ui| {
+                    theme::glass_window_frame(ui.style())
+                        .fill(theme::GLASS_FLOATING)
+                        .inner_margin(5.0)
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            for (index, &(icon, label, active)) in modes.iter().enumerate() {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::vec2(146.0, 28.0),
+                                    egui::Sense::click(),
+                                );
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::Role::Button,
+                                        true,
+                                        active,
+                                        label,
+                                    )
+                                });
+                                let drag_target =
+                                    state.dragging && pointer.is_some_and(|p| rect.contains(p));
+                                let focused = response.has_focus();
+                                let painter = ui.painter();
+                                if active || response.hovered() || drag_target || focused {
+                                    painter.rect_filled(
+                                        rect,
+                                        theme::RADIUS_CONTROL,
+                                        if focused || response.hovered() || drag_target {
+                                            theme::BG_HOVER
+                                        } else {
+                                            theme::ACCENT_SELECT_FILL
+                                        },
+                                    );
+                                }
+                                icons::paint(
+                                    painter,
+                                    egui::Rect::from_center_size(
+                                        rect.left_center() + egui::vec2(16.0, 0.0),
+                                        egui::Vec2::splat(16.0),
+                                    ),
+                                    icon,
+                                    theme::TEXT_PRIMARY,
+                                );
+                                painter.text(
+                                    rect.left_center() + egui::vec2(32.0, 0.0),
+                                    egui::Align2::LEFT_CENTER,
+                                    label,
+                                    theme::dense(),
+                                    theme::TEXT_PRIMARY,
+                                );
+                                if response.clicked() || drag_target && released {
+                                    choice = Some((button.id, index));
+                                }
+                            }
+                        });
+                });
+        }
+    } else {
+        state.open = None;
     }
-    if choice.is_some() {
-        hover_since = None;
+    if choice.is_some() || state.dragging && (released || !down) {
+        state = ToolFlyout::default();
     }
-    ui.data_mut(|data| {
-        data.insert_temp(id, hover_since);
-        data.insert_temp(id.with("drag"), drag_open);
-    });
+    ui.data_mut(|data| data.insert_temp(id, state));
     choice
 }
 
@@ -2310,6 +2381,8 @@ impl SymphonyApp {
         ];
         let context = self.s.tool_context();
         ui.spacing_mut().item_spacing = egui::Vec2::splat(2.0);
+        let mut variants = Vec::new();
+        let mut variant_tools = Vec::new();
         for tool in TOOLS.into_iter().filter(|tool| tool.fits(context)) {
             let mut tip = keymap::tooltip(self.profile, tool_action(tool));
             // Select shows that it also transforms what it selected.
@@ -2389,23 +2462,27 @@ impl SymphonyApp {
                     egui::Stroke::NONE,
                 ));
             }
-            if let Some(choice) = tool_flyout(ui, &response, modes) {
-                match tool {
-                    Tool::Select => {
-                        self.s.tool = Tool::Select;
-                        self.s.cutter_mode = choice == 1;
-                    }
-                    Tool::Brush if choice == 2 => self.s.tool = Tool::Pencil,
-                    Tool::Brush => {
-                        self.s.tool = Tool::Brush;
-                        views::panels::set_bitmap_brush(
-                            &mut self.s,
-                            &mut self.presets,
-                            choice == 1,
-                        );
-                    }
-                    _ => {}
+            if !modes.is_empty() {
+                variant_tools.push((response.id, tool));
+                variants.push((response, modes.to_vec()));
+            }
+        }
+        if let Some((id, choice)) = tool_flyout(ui, &variants) {
+            match variant_tools
+                .iter()
+                .find(|(anchor, _)| *anchor == id)
+                .map(|(_, tool)| *tool)
+            {
+                Some(Tool::Select) => {
+                    self.s.tool = Tool::Select;
+                    self.s.cutter_mode = choice == 1;
                 }
+                Some(Tool::Brush) if choice == 2 => self.s.tool = Tool::Pencil,
+                Some(Tool::Brush) => {
+                    self.s.tool = Tool::Brush;
+                    views::panels::set_bitmap_brush(&mut self.s, &mut self.presets, choice == 1);
+                }
+                _ => {}
             }
         }
     }
