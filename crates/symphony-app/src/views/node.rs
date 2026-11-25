@@ -893,9 +893,8 @@ fn property_row<R>(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egu
     }
 }
 
-/// How far (points) a lifted cable must be pulled from its input before
-/// letting go disconnects it.
-const SNAP_BACK: f32 = 56.0;
+/// Keep box selection away from the cards and their connection targets.
+const MARQUEE_CLEARANCE: f32 = 18.0;
 
 /// Connect `source` to `input`, keeping connections where it can rather
 /// than silently dropping them:
@@ -3300,8 +3299,12 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
     let input_at = |p: Pos2| {
         inputs
             .iter()
-            .find(|(_, at)| at.distance(p) <= hit_radius)
-            .map(|(&key, _)| key)
+            .filter_map(|(&key, &at)| {
+                let distance = at.distance(p);
+                (distance <= hit_radius).then_some((key, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(key, _)| key)
     };
     // Every input, by node, in port order (for picking a free one).
     let cards_inputs: Vec<Input> = inputs.keys().copied().collect();
@@ -3321,31 +3324,69 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
     // Where a cable from `source` dropped at `p` connects: the port under
     // it, else the nearest fitting input of the node under it (empty ports
     // first), else the nearest fitting input within reach.
-    let drop_target =
-        |graph: &symphony_core::graph::Graph, source: NodeId, p: Pos2| -> Option<Input> {
-            let fits =
-                |input: &Input| input.0 != source && graph.can_connect_to(source, input.0, input.1);
-            if let Some(input) = input_at(p).filter(fits) {
-                return Some(input);
-            }
-            let near = |only: Option<NodeId>, reach: f32| {
-                inputs
-                    .iter()
-                    .filter(|(input, _)| fits(input) && only.is_none_or(|n| input.0 == n))
-                    .map(|(&input, &at)| {
-                        let taken = graph.input(input.0, input.1).is_some();
-                        (input, at.distance(p) + if taken { 1000.0 } else { 0.0 })
-                    })
-                    .filter(|(_, d)| *d <= reach)
-                    .min_by(|a, b| a.1.total_cmp(&b.1))
-                    .map(|(input, _)| input)
-            };
-            match node_at(p) {
-                Some(node) if node != source => near(Some(node), f32::INFINITY),
-                Some(_) => None,
-                None => near(None, 40.0 * zoom.clamp(0.6, 1.0)),
-            }
+    let drop_target = |graph: &symphony_core::graph::Graph,
+                       source: NodeId,
+                       old_input: Option<Input>,
+                       p: Pos2|
+     -> Option<Input> {
+        let node = node_at(p);
+        let fits = |input: &Input| {
+            input.0 != source
+                && graph.can_connect_to(source, input.0, input.1)
+                && (Some(*input) != old_input
+                    || node == Some(input.0)
+                    || inputs
+                        .get(input)
+                        .is_some_and(|at| at.distance(p) <= hit_radius))
         };
+        if let Some(input) = input_at(p).filter(fits) {
+            return Some(input);
+        }
+        let near = |only: Option<NodeId>, reach: f32| {
+            inputs
+                .iter()
+                .filter(|(input, _)| fits(input) && only.is_none_or(|n| input.0 == n))
+                .map(|(&input, &at)| {
+                    let taken = graph.input(input.0, input.1).is_some();
+                    (input, at.distance(p) + if taken { 1000.0 } else { 0.0 })
+                })
+                .filter(|(_, d)| *d <= reach)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(input, _)| input)
+        };
+        match node {
+            Some(node) if node != source => near(Some(node), f32::INFINITY),
+            Some(_) => None,
+            None => near(None, 40.0 * zoom.clamp(0.6, 1.0)),
+        }
+    };
+    let wire_at = |graph: &symphony_core::graph::Graph, point: Pos2| {
+        if let Some(input) = input_at(point) {
+            return graph.input(input.0, input.1).map(|from| Link {
+                from,
+                to: input.0,
+                port: input.1,
+            });
+        }
+        if node_at(point).is_some()
+            || output_at(point)
+                .and_then(|id| outputs.get(&id))
+                .is_some_and(|p| p.distance(point) <= hit_radius * 0.5)
+        {
+            return None;
+        }
+        graph
+            .links()
+            .iter()
+            .filter_map(|&link| {
+                let from = *outputs.get(&link.from)?;
+                let to = *inputs.get(&(link.to, link.port))?;
+                let distance = near_cable(point, from, to);
+                (distance <= 8.0).then_some((distance, link))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, link)| link)
+    };
     let space = ui.input(|i| i.key_down(egui::Key::Space));
     let middle = resp.drag_started_by(egui::PointerButton::Middle);
     if space && resp.hovered() {
@@ -3355,19 +3396,13 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
         if let Some(point) = ui.input(|i| i.pointer.press_origin()) {
             state.drag = if space || middle {
                 Some(Drag::Pan)
-            } else if let Some(input) = input_at(point).filter(|input| {
-                s.doc
-                    .graph
-                    .input(input.0, input.1)
-                    .is_some_and(|source| outputs.contains_key(&source))
-            }) {
-                s.doc
-                    .graph
-                    .input(input.0, input.1)
-                    .map(|source| Drag::Cable {
-                        source,
-                        old_input: Some(input),
-                    })
+            } else if let Some(link) =
+                wire_at(&s.doc.graph, point).filter(|link| outputs.contains_key(&link.from))
+            {
+                Some(Drag::Cable {
+                    source: link.from,
+                    old_input: Some((link.to, link.port)),
+                })
             } else if let Some(source) = output_at(point) {
                 Some(Drag::Cable {
                     source,
@@ -3377,11 +3412,17 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
                 let extend = state.selection.contains(&node);
                 select_in_graph(s, state, node, extend);
                 Some(Drag::Node(node, Vec2::ZERO))
-            } else {
+            } else if cards.values().all(|(card, _)| {
+                !card
+                    .expand(MARQUEE_CLEARANCE * zoom.clamp(0.6, 1.0))
+                    .contains(point)
+            }) {
                 Some(Drag::Marquee {
                     start: point,
                     extend: ui.input(|i| i.modifiers.shift),
                 })
+            } else {
+                None
             };
         }
     }
@@ -3528,7 +3569,7 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
                     .or_else(|| ui.input(|i| i.pointer.latest_pos()));
                 let target = release
                     .filter(|p| viewport.contains(*p))
-                    .and_then(|p| drop_target(&s.doc.graph, source, p));
+                    .and_then(|p| drop_target(&s.doc.graph, source, old_input, p));
                 if old_input.is_none() && target.is_none() {
                     let end = release.or_else(|| state.drag_cable.map(|cable| cable.end));
                     if animated {
@@ -3542,7 +3583,7 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
                             ));
                         }
                     }
-                } else if let Some(point) = release.filter(|point| viewport.contains(*point)) {
+                } else if let Some(point) = release {
                     state.released = Some((point, now));
                     state.released_cable = state.drag_cable.take();
                     // A cable lifted off an input and let go close to where
@@ -3550,14 +3591,10 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
                     // the node) snaps back instead of disconnecting.
                     let slipped = old_input
                         .and_then(|input| inputs.get(&input))
-                        .is_some_and(|&at| at.distance(point) < SNAP_BACK);
+                        .is_some_and(|&at| at.distance(point) <= hit_radius);
                     if let Some(input) = target.filter(|&i| old_input != Some(i)) {
                         connect_smart(s, source, input, old_input, &cards_inputs);
-                    } else if target.is_none()
-                        && !slipped
-                        && node_at(point).is_none()
-                        && output_at(point).is_none()
-                    {
+                    } else if !slipped && node_at(point).is_none() && output_at(point).is_none() {
                         // Pulled clearly away into empty space: disconnect.
                         if let Some(input) = old_input {
                             edit_link(s, None, input, None);
@@ -3585,32 +3622,10 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
         }
         ui.ctx().request_repaint();
     }
-    let wire_at = |point: Pos2| {
-        if let Some(input) = input_at(point) {
-            return s.doc.graph.input(input.0, input.1).map(|from| Link {
-                from,
-                to: input.0,
-                port: input.1,
-            });
-        }
-        if node_at(point).is_some() {
-            return None;
-        }
-        s.doc
-            .graph
-            .links()
-            .iter()
-            .filter_map(|&link| {
-                let from = *outputs.get(&link.from)?;
-                let to = *inputs.get(&(link.to, link.port))?;
-                let distance = near_cable(point, from, to);
-                (distance <= 8.0).then_some((distance, link))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, link)| link)
-    };
     let cut = if alt && state.drag.is_none() {
-        resp.hover_pos().and_then(wire_at)
+        resp.interact_pointer_pos()
+            .or_else(|| resp.hover_pos())
+            .and_then(|point| wire_at(&s.doc.graph, point))
     } else {
         None
     };
@@ -3802,12 +3817,12 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
             cut == Some(link) || detach.is_some_and(|id| link.from == id || link.to == id);
         curve(&painter, from, to, cable_style(link, removing));
     }
-    if let Some(Drag::Cable { source, .. }) = state.drag {
+    if let Some(Drag::Cable { source, old_input }) = state.drag {
         if let (Some(&from), Some(pointer)) =
             (outputs.get(&source), ui.input(|i| i.pointer.latest_pos()))
         {
             // The cable jumps to the input it would connect to.
-            let to = drop_target(&s.doc.graph, source, pointer)
+            let to = drop_target(&s.doc.graph, source, old_input, pointer)
                 .and_then(|input| inputs.get(&input).copied())
                 .unwrap_or(pointer);
             let ink = peg_colour(&s.doc.graph, source).unwrap_or(theme::ACCENT_SELECT);
@@ -3935,7 +3950,14 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
     if resp.secondary_clicked() {
         let targets = resp
             .interact_pointer_pos()
-            .map(|point| (input_at(point), node_at(point)))
+            .map(|point| {
+                (
+                    wire_at(&s.doc.graph, point)
+                        .map(|link| (link.to, link.port))
+                        .or_else(|| input_at(point)),
+                    node_at(point),
+                )
+            })
             .unwrap_or_default();
         ui.data_mut(|data| data.insert_temp(menu_id, targets));
     }
@@ -4099,8 +4121,8 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
         };
         let filled = s.doc.graph.input(input.0, input.1).is_some();
         let target = match state.drag {
-            Some(Drag::Cable { source, .. }) => {
-                hover.and_then(|p| drop_target(&s.doc.graph, source, p)) == Some(input)
+            Some(Drag::Cable { source, old_input }) => {
+                hover.and_then(|p| drop_target(&s.doc.graph, source, old_input, p)) == Some(input)
             }
             _ => hover.is_some_and(|p| p.distance(point) <= hit_radius),
         };
@@ -5055,6 +5077,49 @@ mod tests {
         );
         assert_eq!(harness.state().1.pan, middle_end - at);
         assert_eq!(harness.state().1.selection, BTreeSet::from([layer.node]));
+    }
+
+    #[test]
+    fn cable_drag_disconnects_and_close_card_drag_does_not_marquee() {
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(760.0, 560.0))
+            .build_ui_state(
+                |ui, (s, state, origin)| {
+                    *origin = ui.available_rect_before_wrap().center_top();
+                    canvas(ui, s, state, None);
+                },
+                (Session::new_scene(), NodeViewState::default(), Pos2::ZERO),
+            );
+        harness.run_steps(2);
+        let (s, state, origin) = harness.state();
+        let selection = state.selection.clone();
+        let layer = s.doc.layers[0];
+        let centre = *origin + node_position(s, layer.node, &default_positions(s));
+        let near_card = centre - Vec2::new(W * 0.5 + 6.0, 0.0);
+        let over_node = centre + Vec2::new(W, H);
+        pointer_gesture(
+            &mut harness,
+            [near_card, over_node, over_node],
+            egui::Modifiers::NONE,
+            egui::PointerButton::Primary,
+        );
+        assert_eq!(harness.state().1.selection, selection);
+        let (_, state, _) = harness.state();
+        let (wire, from, to) = *state
+            .drawn_links
+            .iter()
+            .find(|(link, ..)| link.from == layer.peg)
+            .unwrap();
+        let start = from.lerp(to, 0.5);
+        let free = to + Vec2::new(29.0, -4.0);
+        pointer_gesture(
+            &mut harness,
+            [start, free, free],
+            egui::Modifiers::NONE,
+            egui::PointerButton::Primary,
+        );
+        let (s, _, _) = harness.state();
+        assert_eq!(s.doc.graph.input(wire.to, wire.port), None);
     }
 
     #[test]
