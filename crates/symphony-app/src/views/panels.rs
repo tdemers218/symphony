@@ -668,6 +668,39 @@ fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pen
     }
 }
 
+pub fn undo_history(ui: &mut egui::Ui, s: &mut Session) {
+    let current = s.history.undo_len();
+    let mut target = None;
+    egui::Frame::new()
+        .inner_margin(theme::CARD_PAD)
+        .show(ui, |ui| {
+            if s.history.entries().next().is_none() {
+                ui.label("No edits in this session.");
+                return;
+            }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for (index, name) in std::iter::once("Before retained edits")
+                        .chain(s.history.entries())
+                        .enumerate()
+                    {
+                        if ui.selectable_label(index == current, name).clicked() {
+                            target = Some(index);
+                        }
+                    }
+                });
+        });
+    if let Some(target) = target {
+        for _ in target..current {
+            s.undo();
+        }
+        for _ in current..target {
+            s.redo();
+        }
+    }
+}
+
 pub fn tool_properties(
     ui: &mut egui::Ui,
     s: &mut Session,
@@ -876,10 +909,27 @@ fn tool_properties_body(
             }
             Tool::LineEditor => {
                 section(ui, "Line Editor");
+                use crate::session::LineSculpt;
+                let vertical = ui.available_width() < 244.0;
+                if widgets::segmented(
+                    ui,
+                    "line-sculpt",
+                    &mut s.line_sculpt,
+                    &[
+                        (LineSculpt::Push, "Push"),
+                        (LineSculpt::Smooth, "Smooth"),
+                        (LineSculpt::Thicken, "Thicken"),
+                        (LineSculpt::Thin, "Thin"),
+                    ],
+                    vertical,
+                ) {
+                    s.line_points.clear();
+                }
+
                 size_slider(ui, "Radius", &mut s.line_edit_radius, 200.0);
                 s.line_edit_radius = s.line_edit_radius.max(1.0);
                 slider(ui, "Strength", &mut s.line_edit_strength, 0.05..=1.0);
-                hint(ui, "Drag to push the lines under the brush: points in the middle move most and the effect fades out towards the edge.");
+                hint(ui, "Drag over lines. Thicken and Thin change stored pressure without moving the path.");
                 ui.add_space(4.0);
                 hint(ui, "Shift-drag to paint over points and select them. Then drag to move only those points.");
                 let n = s.line_points.len();

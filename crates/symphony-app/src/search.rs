@@ -18,7 +18,7 @@ pub enum Command {
     Action(Action),
     ShowView(View),
     OpenPreferences,
-    ShowUndoHistory,
+    LineSculpt(crate::session::LineSculpt),
     ShowOnionAlignment,
     OpenExport(symphony_render::Format),
     Setting(Setting),

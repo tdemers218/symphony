@@ -371,6 +371,37 @@ pub enum InsertExposure {
     Reuse(Id),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LineSculpt {
+    #[default]
+    Push,
+    Smooth,
+    Thicken,
+    Thin,
+}
+
+impl LineSculpt {
+    pub const ALL: [Self; 4] = [Self::Push, Self::Smooth, Self::Thicken, Self::Thin];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Push => "Push lines",
+            Self::Smooth => "Smooth lines",
+            Self::Thicken => "Thicken lines",
+            Self::Thin => "Thin lines",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Push => "line.sculpt.push",
+            Self::Smooth => "line.sculpt.smooth",
+            Self::Thicken => "line.sculpt.thicken",
+            Self::Thin => "line.sculpt.thin",
+        }
+    }
+}
+
 pub struct Session {
     pub doc: Scene,
     pub history: History,
@@ -403,6 +434,7 @@ pub struct Session {
     /// (stroke, point index).
     pub line_edit_radius: f32,
     pub line_edit_strength: f32,
+    pub line_sculpt: LineSculpt,
     pub point_reduction: f32,
     pub show_selected_points: bool,
     pub cutter_mode: bool,
@@ -531,6 +563,7 @@ impl Session {
             erase_all_frames: false,
             line_edit_radius: 40.0,
             line_edit_strength: 1.0,
+            line_sculpt: LineSculpt::Push,
             point_reduction: 1.0,
             show_selected_points: false,
             cutter_mode: false,
@@ -3222,6 +3255,54 @@ impl Session {
         self.commit_line_edit(drawing, before, after);
     }
 
+    pub fn line_sculpt(
+        &mut self,
+        drawing: Id,
+        at: [f32; 2],
+        radius: f32,
+        mode: LineSculpt,
+        amount: f32,
+    ) {
+        let amount = (amount * self.line_edit_strength).clamp(0.0, 1.0);
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        for stroke in self.editable(drawing, Some((at, radius))) {
+            if stroke.kind == StrokeKind::Invisible {
+                continue;
+            }
+            let mut next = stroke.clone();
+            for (index, point) in next.points.iter_mut().enumerate() {
+                let t = (1.0 - (point.x - at[0]).hypot(point.y - at[1]) / radius.max(1e-3))
+                    .clamp(0.0, 1.0);
+                let strength = amount * t * t * (3.0 - 2.0 * t);
+                if strength == 0.0 {
+                    continue;
+                }
+                match mode {
+                    LineSculpt::Smooth => {
+                        if index > 0 && index + 1 < stroke.points.len() {
+                            let a = stroke.points[index - 1];
+                            let b = stroke.points[index + 1];
+                            point.x += ((a.x + b.x) * 0.5 - point.x) * strength * 0.5;
+                            point.y += ((a.y + b.y) * 0.5 - point.y) * strength * 0.5;
+                        }
+                    }
+                    LineSculpt::Thicken => point.pressure = (point.pressure + strength).min(1.0),
+                    LineSculpt::Thin => point.pressure = (point.pressure - strength).max(0.0),
+                    LineSculpt::Push => {}
+                }
+            }
+            if next != stroke {
+                if !self.line_touched.contains(&stroke.id) {
+                    self.line_touched.push(stroke.id);
+                }
+                before.push(stroke);
+                after.push(next);
+            }
+        }
+        self.commit_line_edit(drawing, before, after);
+    }
+
     /// Shift-paint: add the points within `radius` of `at` to the
     /// Line Editor's selection.
     pub fn line_select(&mut self, drawing: Id, at: [f32; 2], radius: f32) {
@@ -3597,6 +3678,28 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thinning_keeps_the_path_and_undoes_as_one_gesture() {
+        let mut s = Session::new_scene();
+        square_drawing(&mut s);
+        let drawing = s.doc.exposed(0, 1).unwrap();
+        let before = s.doc.drawings[&drawing].strokes[0].clone();
+        let point = before.points[0];
+        for _ in 0..2 {
+            s.line_sculpt(drawing, [point.x, point.y], 12.0, LineSculpt::Thin, 0.2);
+        }
+        s.line_edit_finish(drawing, 0.0);
+        let after = &s.doc.drawings[&drawing].strokes[0];
+        assert!(after.points[0].pressure < point.pressure);
+        assert!(before
+            .points
+            .iter()
+            .zip(&after.points)
+            .all(|(a, b)| (a.x, a.y) == (b.x, b.y)));
+        s.undo();
+        assert_eq!(s.doc.drawings[&drawing].strokes[0], before);
+    }
 
     #[test]
     fn onion_alignment_changes_only_the_ghost_transform() {

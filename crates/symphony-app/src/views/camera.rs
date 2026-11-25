@@ -96,6 +96,7 @@ impl Default for CanvasState {
 #[derive(Clone, Copy, PartialEq)]
 enum LineMode {
     Push,
+    Sculpt(crate::session::LineSculpt),
     Select,
     MoveSelected,
 }
@@ -113,7 +114,7 @@ struct LineDrag {
 
 /// One step of a Line Editor drag to scene point `to`; `radius` is in
 /// drawing units.
-fn line_step(s: &mut Session, le: &mut LineDrag, to: (f32, f32), radius: f32) {
+fn line_step(s: &mut Session, le: &mut LineDrag, to: (f32, f32), radius: f32, pressure: f32) {
     let (x, y) = le.to_local.apply(to.0, to.1);
     let delta = [x - le.last[0], y - le.last[1]];
     if delta[0] == 0.0 && delta[1] == 0.0 {
@@ -122,6 +123,10 @@ fn line_step(s: &mut Session, le: &mut LineDrag, to: (f32, f32), radius: f32) {
     le.moved = true;
     match le.mode {
         LineMode::Push => s.line_push(le.drawing, le.last, radius, delta),
+        LineMode::Sculpt(mode) => {
+            let amount = (delta[0].hypot(delta[1]) / radius.max(1e-3)).min(1.0) * pressure;
+            s.line_sculpt(le.drawing, [x, y], radius, mode, amount);
+        }
         LineMode::Select => s.line_select(le.drawing, [x, y], radius),
         LineMode::MoveSelected => s.line_move_selected(le.drawing, delta),
     }
@@ -1601,8 +1606,10 @@ pub fn ui(
                         LineMode::Select
                     } else if !s.line_points.is_empty() {
                         LineMode::MoveSelected
-                    } else {
+                    } else if s.line_sculpt == crate::session::LineSculpt::Push {
                         LineMode::Push
+                    } else {
+                        LineMode::Sculpt(s.line_sculpt)
                     };
                     if mode == LineMode::Select {
                         let r =
@@ -1741,14 +1748,14 @@ pub fn ui(
                     erase_at(s, state, (sx, sy), r);
                 } else if let Some(le) = state.line_edit.as_mut() {
                     let r = s.line_edit_radius * size_unit(s, px) / scale_of(layer_world).max(1e-6);
-                    line_step(s, le, (sx, sy), r);
+                    line_step(s, le, (sx, sy), r, sm.pressure);
                 }
             }
             Phase::Up => {
                 if let Some(mut le) = state.line_edit.take() {
                     // The last stretch, up to where the pen lifted.
                     let r = s.line_edit_radius * size_unit(s, px) / scale_of(layer_world).max(1e-6);
-                    line_step(s, &mut le, (sx, sy), r);
+                    line_step(s, &mut le, (sx, sy), r, sm.pressure);
                     match le.mode {
                         LineMode::Push if le.moved => {
                             // Slim the pushed lines back to the detail setting.
@@ -1758,7 +1765,9 @@ pub fn ui(
                         }
                         // A click without dragging clears the point selection.
                         LineMode::MoveSelected if !le.moved => s.line_points.clear(),
-                        LineMode::MoveSelected => s.line_edit_finish(le.drawing, 0.0),
+                        LineMode::MoveSelected | LineMode::Sculpt(_) => {
+                            s.line_edit_finish(le.drawing, 0.0)
+                        }
                         _ => s.end_gesture(),
                     }
                 }

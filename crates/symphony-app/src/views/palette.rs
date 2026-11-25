@@ -94,6 +94,7 @@ fn placeholder(here: Option<View>) -> &'static str {
             "Search tools, properties, and settings…"
         }
         Some(View::Library) => "Search the library and views…",
+        Some(View::UndoHistory) => "Search editing actions and views…",
         None => "Search tools, actions, and settings…",
     }
 }

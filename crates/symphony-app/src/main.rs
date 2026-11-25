@@ -1759,9 +1759,9 @@ impl SymphonyApp {
                 .map_or("Redo".into(), |n| format!("Redo {n}"));
             self.menu_item(ui, Action::Undo, undo);
             self.menu_item(ui, Action::Redo, redo);
-            if ui.button("Undo history").clicked() {
-                ui.ctx()
-                    .data_mut(|data| data.insert_temp(egui::Id::unique("undo-history-open"), true));
+            if ui.button("Undo History").clicked() {
+                self.maximised = None;
+                self.show_view(View::UndoHistory);
                 ui.close();
             }
 
@@ -2475,15 +2475,6 @@ impl SymphonyApp {
         let mut out: Vec<Entry> = Vec::new();
         out.push(
             Entry::new(
-                "Undo history",
-                Kind::Action,
-                Command::ShowUndoHistory,
-                "edit.undo-history",
-            )
-            .words("operations transactions redo restore previous state"),
-        );
-        out.push(
-            Entry::new(
                 "Align onion skins",
                 Kind::Action,
                 Command::ShowOnionAlignment,
@@ -2492,6 +2483,18 @@ impl SymphonyApp {
             .words("move reposition rotate scale offset ghost previous next")
             .ctx(&canvas),
         );
+        for mode in session::LineSculpt::ALL {
+            out.push(
+                Entry::new(
+                    mode.title(),
+                    Kind::Tool,
+                    Command::LineSculpt(mode),
+                    mode.id(),
+                )
+                .words("line editor sculpt width pressure")
+                .ctx(&canvas),
+            );
+        }
         #[cfg(target_os = "macos")]
         out.push(
             Entry::new(
@@ -3023,8 +3026,10 @@ impl SymphonyApp {
     fn run_command(&mut self, ctx: &egui::Context, cmd: search::Command) {
         use search::{Command, Setting};
         match cmd {
-            Command::ShowUndoHistory => {
-                ctx.data_mut(|data| data.insert_temp(egui::Id::unique("undo-history-open"), true));
+            Command::LineSculpt(mode) => {
+                self.s.tool = Tool::LineEditor;
+                self.s.line_sculpt = mode;
+                self.s.line_points.clear();
             }
             Command::ShowOnionAlignment => {
                 self.s.onion.on = true;
@@ -3532,45 +3537,6 @@ impl SymphonyApp {
     }
 
     fn workflow_windows(&mut self, ctx: &egui::Context) {
-        let history_id = egui::Id::unique("undo-history-open");
-        let mut history = ctx
-            .data(|data| data.get_temp::<bool>(history_id))
-            .unwrap_or(false);
-        if history {
-            let current = self.s.history.undo_len();
-            let mut target = None;
-            egui::Window::new("Undo History")
-                .default_width(284.0)
-                .collapsible(false)
-                .open(&mut history)
-                .show(ctx, |ui| {
-                    if self.s.history.entries().next().is_none() {
-                        ui.label("No edits in this session.");
-                        return;
-                    }
-                    egui::ScrollArea::vertical()
-                        .max_height(384.0)
-                        .show(ui, |ui| {
-                            for (index, name) in std::iter::once("Before retained edits")
-                                .chain(self.s.history.entries())
-                                .enumerate()
-                            {
-                                if ui.selectable_label(index == current, name).clicked() {
-                                    target = Some(index);
-                                }
-                            }
-                        });
-                });
-            if let Some(target) = target {
-                for _ in target..current {
-                    self.s.undo();
-                }
-                for _ in current..target {
-                    self.s.redo();
-                }
-            }
-            ctx.data_mut(|data| data.insert_temp(history_id, history));
-        }
         let alignment_id = egui::Id::unique("onion-alignment-open");
         let mut alignment = ctx
             .data(|data| data.get_temp::<bool>(alignment_id))
@@ -3879,6 +3845,7 @@ impl Viewer<'_> {
             View::LayerProperties => node::inspector(ui, self.s, self.node_view),
             View::Function => function::ui(ui, self.s, self.function),
             View::NodeLibrary => node::library(ui, self.s, self.node_view),
+            View::UndoHistory => panels::undo_history(ui, self.s),
             View::Library => panels::planned(ui, "Library (templates and symbols)", "M6"),
         }
     }
