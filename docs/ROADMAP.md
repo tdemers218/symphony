@@ -1,5 +1,7 @@
 # Roadmap
 
+See the [reconciled feature direction](plans/feature-direction.md) for workflow, architecture and production milestones beyond this table.
+
 Each milestone ends in something an animator can try.
 
 | # | Milestone | Done when |

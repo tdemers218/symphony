@@ -320,6 +320,31 @@ pub struct PegValues {
     pub scale_y: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OnionAlignment {
+    pub offset: [f32; 2],
+    pub rotation: f32,
+    pub scale: f32,
+}
+
+impl Default for OnionAlignment {
+    fn default() -> Self {
+        Self {
+            offset: [0.0; 2],
+            rotation: 0.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl OnionAlignment {
+    pub fn transform(self) -> Affine {
+        Affine::translate(self.offset[0], self.offset[1])
+            .compose(Affine::rotate_deg(self.rotation))
+            .compose(Affine::scale(self.scale, self.scale))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Onion {
     pub on: bool,
@@ -327,6 +352,7 @@ pub struct Onion {
     pub after: u32,
     /// Opacity of the nearest onion drawing; farther ones fade from it.
     pub opacity: f32,
+    pub alignment: [OnionAlignment; 2],
 }
 
 /// Strokes picked with the Select tool, in one drawing.
@@ -517,6 +543,7 @@ impl Session {
                 before: 1,
                 after: 1,
                 opacity: 0.45,
+                alignment: Default::default(),
             },
             brush_size_cursor: true,
             pen_modes: false,
@@ -3570,6 +3597,23 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn onion_alignment_changes_only_the_ghost_transform() {
+        let mut s = Session::new_scene();
+        square_drawing(&mut s);
+        let before = symphony_render::render_frame(&s.doc, 1, 160, 90).unwrap();
+        s.onion.alignment[0] = OnionAlignment {
+            offset: [40.0, -8.0],
+            rotation: 90.0,
+            scale: 2.0,
+        };
+        let (x, y) = s.onion.alignment[0].transform().apply(4.0, 0.0);
+        assert!((x - 40.0).abs() < 1e-4 && y.abs() < 1e-4);
+        assert_eq!(s.onion.alignment[1].transform(), Affine::IDENTITY);
+        let after = symphony_render::render_frame(&s.doc, 1, 160, 90).unwrap();
+        assert_eq!(before, after);
+    }
 
     #[test]
     fn cutter_splits_line_and_fill_selects_inside_and_undoes_together() {

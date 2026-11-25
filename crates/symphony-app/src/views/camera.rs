@@ -677,6 +677,58 @@ fn dense_label(ui: &mut egui::Ui, text: impl Into<String>) {
     );
 }
 
+pub(crate) fn onion_alignment(ui: &mut egui::Ui, s: &mut Session) {
+    use crate::session::OnionAlignment;
+    for (label, alignment) in ["Previous drawings", "Next drawings"]
+        .into_iter()
+        .zip(&mut s.onion.alignment)
+    {
+        ui.push_id(label, |ui| {
+            ui.label(egui::RichText::new(label).strong());
+            ui.horizontal_wrapped(|ui| {
+                for (label, axis) in ["X ", "Y "].into_iter().zip(&mut alignment.offset) {
+                    ui.add(
+                        egui::DragValue::new(axis)
+                            .prefix(label)
+                            .range(-100_000.0..=100_000.0),
+                    );
+                }
+                ui.add(
+                    egui::DragValue::new(&mut alignment.rotation)
+                        .prefix("Angle ")
+                        .suffix("°")
+                        .range(-360.0..=360.0),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut alignment.scale)
+                        .prefix("Scale ×")
+                        .range(0.05..=20.0)
+                        .speed(0.01),
+                );
+            });
+            if ui
+                .add_enabled(
+                    *alignment != OnionAlignment::default(),
+                    egui::Button::new("Reset"),
+                )
+                .clicked()
+            {
+                *alignment = OnionAlignment::default();
+            }
+        });
+    }
+    if ui
+        .add_enabled(onion_shifted(s), egui::Button::new("Reset both"))
+        .clicked()
+    {
+        s.onion.alignment = Default::default();
+    }
+}
+
+fn onion_shifted(s: &Session) -> bool {
+    s.onion.alignment != [crate::session::OnionAlignment::default(); 2]
+}
+
 /// Top toolbar (D3.5a): display options, here onion skin.
 fn top_toolbar(
     ui: &mut egui::Ui,
@@ -697,7 +749,12 @@ fn top_toolbar(
                 // The details live in a small menu, so the bar keeps its
                 // room for view and drawing controls.
                 let summary = if s.onion.on {
-                    format!("{} | {}", s.onion.before, s.onion.after)
+                    format!(
+                        "{} | {}{}",
+                        s.onion.before,
+                        s.onion.after,
+                        if onion_shifted(s) { " · Adjusted" } else { "" }
+                    )
                 } else {
                     "Off".to_owned()
                 };
@@ -769,6 +826,7 @@ fn top_toolbar(
                         s.onion.opacity = percent / 100.0;
                     }
                     ui.separator();
+                    ui.collapsing("Align onion skins", |ui| onion_alignment(ui, s));
                     ui.checkbox(&mut s.light_table, "Light table")
                         .on_hover_text(
                             "Show the other layers' drawings faintly behind the one you're drawing",
@@ -1079,7 +1137,11 @@ pub fn ui(
             CanvasColours::get(colours.onion_before),
             CanvasColours::get(colours.onion_after),
         ];
-        for (list, tint) in [(before, tints[0]), (after, tints[1])] {
+        for ((list, tint), alignment) in [(before, tints[0]), (after, tints[1])]
+            .into_iter()
+            .zip(s.onion.alignment)
+        {
+            let transform = view.compose(layer_world).compose(alignment.transform());
             for (k, d) in list.iter().enumerate().rev() {
                 let alpha = s.onion.opacity.clamp(0.05, 1.0) / (k as f32 + 1.0);
                 if let Some(dr) = s.doc.drawings.get(d) {
@@ -1089,7 +1151,7 @@ pub fn ui(
                             &painter,
                             f,
                             tint.gamma_multiply(alpha * 0.35),
-                            view.compose(layer_world),
+                            transform,
                         );
                     }
                     for st in &dr.strokes {
@@ -1099,7 +1161,7 @@ pub fn ui(
                             &s.doc.textures,
                             st,
                             tint.gamma_multiply(alpha),
-                            view.compose(layer_world),
+                            transform,
                         );
                     }
                 }

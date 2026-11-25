@@ -18,6 +18,8 @@ pub enum Command {
     Action(Action),
     ShowView(View),
     OpenPreferences,
+    ShowUndoHistory,
+    ShowOnionAlignment,
     OpenExport(symphony_render::Format),
     Setting(Setting),
     GoToFrame(u32),

@@ -1,5 +1,7 @@
 # Symphony: where we are and where we're going
 
+[Feature direction and implementation audit](plans/feature-direction.md)
+
 This is the master plan. It covers how the app works today, what's left,
 and the full feature list: every feature Harmony has that we plan to match
 first. Once the big chunk is done we'll improve some of them and add new
