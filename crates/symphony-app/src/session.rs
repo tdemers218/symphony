@@ -164,6 +164,7 @@ fn densify_near(points: &[Point], at: [f32; 2], radius: f32, step: f32) -> Vec<P
                     x: p.x + (q.x - p.x) * t,
                     y: p.y + (q.y - p.y) * t,
                     pressure: p.pressure + (q.pressure - p.pressure) * t,
+                    width_offset: p.width_offset + (q.width_offset - p.width_offset) * t,
                     pen: symphony_core::stroke::Pen::lerp(p.pen, q.pen, t),
                 });
             }
@@ -290,7 +291,7 @@ pub fn stencil_from(stroke: &Stroke) -> Option<Stencil> {
     if total <= 0.0 {
         return None;
     }
-    let width = |i: usize| stroke.width_at(stroke.points[i].pressure);
+    let width = |i: usize| stroke.point_width(&stroke.points[i]);
     let mut out = [0.0; STENCIL_SAMPLES];
     for (k, slot) in out.iter_mut().enumerate() {
         let target = total * k as f32 / (STENCIL_SAMPLES - 1) as f32;
@@ -632,6 +633,7 @@ impl Session {
                         x: cx + r * t.cos(),
                         y: cy + r * t.sin(),
                         pressure: 0.55 + 0.45 * (t * 1.5).sin().abs(),
+                        width_offset: 0.0,
                         pen: Default::default(),
                     }
                 })
@@ -644,6 +646,7 @@ impl Session {
                     x,
                     y,
                     pressure: 0.3 + 0.7 * ((i as f32) * 0.9).sin().abs(),
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect()
@@ -3284,10 +3287,10 @@ impl Session {
     // ---- Line Editor ------------------------------------------------------
 
     /// Strokes of `drawing` the Line Editor can change: vector lines on the
-    /// current art layer (not erased outlines).
+    /// current art layer, including cut outlines when the edit supports them.
     /// Only strokes whose bounds come within `reach` of `near` (when given)
     /// are copied, so a drag stays fast on busy drawings.
-    fn editable(&self, drawing: Id, near: Option<([f32; 2], f32)>) -> Vec<Stroke> {
+    fn editable(&self, drawing: Id, near: Option<([f32; 2], f32)>, contours: bool) -> Vec<Stroke> {
         let art = self.art;
         let close = |st: &Stroke| {
             let Some((c, r)) = near else { return true };
@@ -3301,7 +3304,7 @@ impl Session {
             .map(|d| {
                 d.strokes
                     .iter()
-                    .filter(|st| st.art == art && st.shape.is_empty() && close(st))
+                    .filter(|st| st.art == art && (contours || st.shape.is_empty()) && close(st))
                     .cloned()
                     .collect()
             })
@@ -3341,7 +3344,37 @@ impl Session {
         };
         let mut before = Vec::new();
         let mut after = Vec::new();
-        for st in self.editable(drawing, Some((at, r))) {
+        for st in self.editable(drawing, Some((at, r)), true) {
+            if !st.shape.is_empty() {
+                let mut moved = st.clone();
+                let mut changed = false;
+                for point in moved.shape.iter_mut().flatten() {
+                    let w = weight(&Point {
+                        x: point[0],
+                        y: point[1],
+                        ..Point::default()
+                    });
+                    if w > 0.0 {
+                        point[0] += delta[0] * w;
+                        point[1] += delta[1] * w;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    // Keep the stamp path aligned with the edited contour.
+                    for p in &mut moved.points {
+                        let w = weight(p);
+                        p.x += delta[0] * w;
+                        p.y += delta[1] * w;
+                    }
+                    if !self.line_touched.contains(&st.id) {
+                        self.line_touched.push(st.id);
+                    }
+                    before.push(st);
+                    after.push(moved);
+                }
+                continue;
+            }
             if !st.points.iter().any(|p| weight(p) > 0.0)
                 && !st.points.windows(2).any(|w| {
                     // A long segment can pass through the brush with both
@@ -3350,6 +3383,7 @@ impl Session {
                         x: (w[0].x + w[1].x) * 0.5,
                         y: (w[0].y + w[1].y) * 0.5,
                         pressure: 1.0,
+                        width_offset: 0.0,
                         pen: Default::default(),
                     };
                     weight(&mid) > 0.0
@@ -3384,7 +3418,7 @@ impl Session {
         let amount = (amount * self.line_edit_strength).clamp(0.0, 1.0);
         let mut before = Vec::new();
         let mut after = Vec::new();
-        for stroke in self.editable(drawing, Some((at, radius))) {
+        for stroke in self.editable(drawing, Some((at, radius)), false) {
             if stroke.kind == StrokeKind::Invisible {
                 continue;
             }
@@ -3413,8 +3447,11 @@ impl Session {
                             point.pressure += (average - point.pressure) * strength;
                         }
                     }
-                    LineSculpt::Thicken => point.pressure = (point.pressure + strength).min(1.0),
-                    LineSculpt::Thin => point.pressure = (point.pressure - strength).max(0.0),
+                    LineSculpt::Thicken => point.width_offset += strength * radius * 0.25,
+                    LineSculpt::Thin => {
+                        let available = (stroke.point_width(point) - 0.1).max(0.0);
+                        point.width_offset -= (strength * radius * 0.25).min(available);
+                    }
                     LineSculpt::Push => {}
                 }
             }
@@ -3432,12 +3469,20 @@ impl Session {
     /// Shift-paint: add the points within `radius` of `at` to the
     /// Line Editor's selection.
     pub fn line_select(&mut self, drawing: Id, at: [f32; 2], radius: f32) {
-        for st in self.editable(drawing, Some((at, radius))) {
-            for (i, p) in st.points.iter().enumerate() {
-                if (p.x - at[0]).hypot(p.y - at[1]) <= radius
-                    && !self.line_points.contains(&(st.id, i))
+        for st in self.editable(drawing, Some((at, radius)), true) {
+            let mut select = |i, [x, y]: [f32; 2]| {
+                if (x - at[0]).hypot(y - at[1]) <= radius && !self.line_points.contains(&(st.id, i))
                 {
                     self.line_points.push((st.id, i));
+                }
+            };
+            if st.shape.is_empty() {
+                for (i, p) in st.points.iter().enumerate() {
+                    select(i, [p.x, p.y]);
+                }
+            } else {
+                for (i, &p) in st.shape.iter().flatten().enumerate() {
+                    select(i, p);
                 }
             }
         }
@@ -3449,7 +3494,7 @@ impl Session {
         let mut after = Vec::new();
         let picked_ids: Vec<Id> = self.line_points.iter().map(|(id, _)| *id).collect();
         for st in self
-            .editable(drawing, None)
+            .editable(drawing, None, true)
             .into_iter()
             .filter(|st| picked_ids.contains(&st.id))
         {
@@ -3464,9 +3509,14 @@ impl Session {
             }
             let mut moved = st.clone();
             for i in picked {
-                if let Some(p) = moved.points.get_mut(i) {
-                    p.x += delta[0];
-                    p.y += delta[1];
+                if moved.shape.is_empty() {
+                    if let Some(p) = moved.points.get_mut(i) {
+                        p.x += delta[0];
+                        p.y += delta[1];
+                    }
+                } else if let Some(p) = moved.shape.iter_mut().flatten().nth(i) {
+                    p[0] += delta[0];
+                    p[1] += delta[1];
                 }
             }
             if !self.line_touched.contains(&st.id) {
@@ -3699,7 +3749,7 @@ impl Session {
         let mut after = Vec::new();
         let touched = std::mem::take(&mut self.line_touched);
         for st in self
-            .editable(drawing, None)
+            .editable(drawing, None, false)
             .into_iter()
             .filter(|st| touched.contains(&st.id))
         {
@@ -3865,14 +3915,55 @@ mod tests {
         }
         s.line_edit_finish(drawing, 0.0);
         let after = &s.doc.drawings[&drawing].strokes[0];
-        assert!(after.points[0].pressure < point.pressure);
+        assert_eq!(after.points[0].pressure, point.pressure);
+        assert!(after.point_width(&after.points[0]) < before.min_width);
+        assert_eq!(after.min_width, before.min_width);
+        assert_eq!(after.max_width, before.max_width);
         assert!(before
             .points
             .iter()
             .zip(&after.points)
             .all(|(a, b)| (a.x, a.y) == (b.x, b.y)));
+        let edited = after.clone();
+        let reopened: Stroke =
+            serde_json::from_slice(&serde_json::to_vec(&edited).unwrap()).unwrap();
+        assert_eq!(reopened, edited);
         s.undo();
         assert_eq!(s.doc.drawings[&drawing].strokes[0], before);
+        s.redo();
+        assert_eq!(s.doc.drawings[&drawing].strokes[0], edited);
+        s.undo();
+
+        s.line_sculpt(drawing, [point.x, point.y], 12.0, LineSculpt::Thicken, 1.0);
+        let thickened = &s.doc.drawings[&drawing].strokes[0];
+        assert!(thickened.point_width(&thickened.points[0]) > before.max_width);
+        assert_eq!(thickened.points[0].pressure, point.pressure);
+    }
+
+    #[test]
+    fn cutter_outline_points_remain_editable() {
+        let mut s = Session::new_scene();
+        square_drawing(&mut s);
+        let id = s.doc.exposed(0, 1).unwrap();
+        s.validate_selection();
+        s.cut_area(
+            id,
+            vec![[50.0, 0.0], [100.0, 0.0], [100.0, 100.0], [50.0, 100.0]],
+            false,
+            false,
+        );
+        let fragment = s.selected_strokes()[0].clone();
+        let point = fragment.shape[0][0];
+        s.line_select(id, point, 0.01);
+        assert!(s.line_points.contains(&(fragment.id, 0)));
+        s.line_move_selected(id, [2.0, 3.0]);
+        s.line_edit_finish(id, 0.0);
+        assert_eq!(
+            s.selected_strokes()[0].shape[0][0],
+            [point[0] + 2.0, point[1] + 3.0]
+        );
+        s.undo();
+        assert!(s.doc.drawings[&id].strokes.contains(&fragment));
     }
 
     #[test]
@@ -4133,12 +4224,14 @@ mod tests {
                     x: x0,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
                 Point {
                     x: x1,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
             ],
@@ -4219,6 +4312,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -4311,6 +4405,7 @@ mod tests {
                         x: t * 100.0,
                         y: 0.0,
                         pressure: pressure(t),
+                        width_offset: 0.0,
                         pen: Default::default(),
                     }
                 })
@@ -4400,12 +4495,14 @@ mod tests {
                     x: 0.0,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
                 Point {
                     x: 200.0,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
             ],
@@ -4486,6 +4583,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -4651,6 +4749,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -4667,12 +4766,14 @@ mod tests {
                 x: 14.0,
                 y: 20.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             },
             Point {
                 x: 14.0,
                 y: 80.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             },
         ];

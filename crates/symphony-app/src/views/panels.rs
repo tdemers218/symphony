@@ -1002,7 +1002,7 @@ fn tool_properties_body(
                 size_slider(ui, "Radius", &mut s.line_edit_radius, 200.0);
                 s.line_edit_radius = s.line_edit_radius.max(1.0);
                 slider(ui, "Strength", &mut s.line_edit_strength, 0.05..=1.0);
-                hint(ui, "Drag over lines. Thicken and Thin change stored pressure without moving the path.");
+                hint(ui, "Drag over lines. Thicken and Thin change local width without moving the path or changing pressure.");
                 ui.add_space(4.0);
                 hint(ui, "Shift-drag to paint over points and select them. Then drag to move only those points.");
                 let n = s.line_points.len();

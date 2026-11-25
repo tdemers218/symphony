@@ -80,6 +80,7 @@ fn stroke(st: &Stroke, warp: &Warp, piece: f32, k: f32) -> Stroke {
                     x: a.x + (b.x - a.x) * t,
                     y: a.y + (b.y - a.y) * t,
                     pressure: a.pressure + (b.pressure - a.pressure) * t,
+                    width_offset: a.width_offset + (b.width_offset - a.width_offset) * t,
                     pen: symphony_core::stroke::Pen::lerp(a.pen, b.pen, t),
                 });
             }
@@ -126,6 +127,7 @@ mod tests {
             x,
             y: 0.0,
             pressure: 1.0,
+            width_offset: 0.0,
             pen: Default::default(),
         };
         let line = Stroke {

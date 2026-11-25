@@ -11,11 +11,18 @@ pub struct Point {
     pub y: f32,
     /// 0..=1 after the pressure curve.
     pub pressure: f32,
+    /// A local Line Editor adjustment in drawing units, independent of pen pressure.
+    #[serde(default, skip_serializing_if = "is_zero_width_offset")]
+    pub width_offset: f32,
     /// How the pen was held here (tilt and rotation), so brushes that
     /// follow them still do after the line is edited. Zero for mice and
     /// for lines drawn before Symphony kept it.
     #[serde(default, skip_serializing_if = "Pen::is_level")]
     pub pen: Pen,
+}
+
+fn is_zero_width_offset(value: &f32) -> bool {
+    *value == 0.0
 }
 
 /// The pen's attitude at a point, in degrees.
@@ -433,6 +440,12 @@ pub struct Stroke {
 impl Stroke {
     pub fn width_at(&self, pressure: f32) -> f32 {
         self.min_width + (self.max_width - self.min_width) * pressure.clamp(0.0, 1.0)
+    }
+    pub fn point_width(&self, point: &Point) -> f32 {
+        let size = self
+            .texture
+            .map_or(point.pressure, |texture| texture.size_at(point.pressure));
+        (self.width_at(size) + point.width_offset).max(0.0)
     }
 }
 

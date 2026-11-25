@@ -42,6 +42,7 @@ pub fn heavy_scene() -> Session {
                                 + k as f32 * 8.0
                                 + (t * 9.0 + i as f32).sin() * 12.0,
                             pressure: 0.3 + 0.7 * (t * std::f32::consts::PI).sin(),
+                            width_offset: 0.0,
                             pen: Default::default(),
                         }
                     })

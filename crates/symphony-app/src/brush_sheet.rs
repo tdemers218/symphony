@@ -33,6 +33,7 @@ fn point(x: u32, y: u32, pressure: f32) -> Point {
         x: x as f32 + 0.5,
         y: y as f32 + 0.5,
         pressure,
+        width_offset: 0.0,
         pen: Default::default(),
     }
 }

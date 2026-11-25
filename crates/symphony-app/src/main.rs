@@ -2443,6 +2443,7 @@ impl SymphonyApp {
                         x: -420.0 + t * 380.0,
                         y: y + (t * std::f32::consts::TAU).sin() * 14.0,
                         pressure: (t * std::f32::consts::PI).sin(),
+                        width_offset: 0.0,
                         pen: Default::default(),
                     }
                 })

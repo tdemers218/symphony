@@ -265,7 +265,7 @@ fn rasterize(st: &Stroke, ink: &mut [bool], w: usize, h: usize, origin: [f32; 2]
     };
     let st = &curved;
     let to_grid = |px: f32, py: f32| ((px - origin[0]) / cell, (py - origin[1]) / cell);
-    let radius = |p: f32| (st.width_at(p) * 0.5 / cell).max(0.75);
+    let radius = |p: &crate::Point| (st.point_width(p) * 0.5 / cell).max(0.75);
     let mut mark = |ax: f32, ay: f32, ar: f32, bx: f32, by: f32, br: f32| {
         let r = ar.max(br);
         let (x0, x1) = (
@@ -297,14 +297,14 @@ fn rasterize(st: &Stroke, ink: &mut [bool], w: usize, h: usize, origin: [f32; 2]
         [] => {}
         [p] => {
             let (gx, gy) = to_grid(p.x, p.y);
-            let r = radius(p.pressure);
+            let r = radius(p);
             mark(gx, gy, r, gx, gy, r);
         }
         pts => {
             for s in pts.windows(2) {
                 let (ax, ay) = to_grid(s[0].x, s[0].y);
                 let (bx, by) = to_grid(s[1].x, s[1].y);
-                mark(ax, ay, radius(s[0].pressure), bx, by, radius(s[1].pressure));
+                mark(ax, ay, radius(&s[0]), bx, by, radius(&s[1]));
             }
         }
     }
@@ -470,6 +470,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),

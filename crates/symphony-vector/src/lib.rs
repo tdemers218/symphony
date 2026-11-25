@@ -60,6 +60,7 @@ impl Smoother {
             y: prev.y + (raw.y - prev.y) * a,
             // Pressure is smoothed more lightly, so taper still reacts quickly.
             pressure: prev.pressure + (raw.pressure - prev.pressure) * a.max(0.5),
+            width_offset: 0.0,
             pen: symphony_core::stroke::Pen::lerp(prev.pen, raw.pen, a.max(0.5)),
         };
         if (p.x - prev.x).hypot(p.y - prev.y) < min_dist {
@@ -104,7 +105,7 @@ pub fn tessellate(stroke: &Stroke, transform: Affine, min_step: f32) -> Mesh {
     let curve = curve::spline(&stroke.points, (min_step * 2.0 / k.max(1e-6)).max(1e-3));
     for p in &curve {
         let (x, y) = transform.apply(p.x, p.y);
-        let w = stroke.width_at(p.pressure) * k * 0.5;
+        let w = stroke.point_width(p) * k * 0.5;
         if let Some((last, lw)) = pts.last_mut() {
             if (x - last[0]).hypot(y - last[1]) < min_step {
                 *lw = lw.max(w);
@@ -188,7 +189,7 @@ pub fn hits(stroke: &Stroke, x: f32, y: f32, r: f32) -> bool {
     if !stroke.shape.is_empty() {
         return shape::hits_shape(&stroke.shape, x, y, r);
     }
-    let near = |p: &Point| r + stroke.width_at(p.pressure) * 0.5;
+    let near = |p: &Point| r + stroke.point_width(p) * 0.5;
     match stroke.points.as_slice() {
         [] => false,
         [p] => (p.x - x).hypot(p.y - y) <= near(p),
@@ -221,10 +222,10 @@ pub fn bounds(stroke: &Stroke) -> Option<([f32; 2], [f32; 2])> {
     }
     let mut it = stroke.points.iter();
     let first = it.next()?;
-    let r0 = stroke.width_at(first.pressure) * 0.5;
+    let r0 = stroke.point_width(first) * 0.5;
     let (mut lo, mut hi) = ([first.x - r0, first.y - r0], [first.x + r0, first.y + r0]);
     for p in it {
-        let r = stroke.width_at(p.pressure) * 0.5;
+        let r = stroke.point_width(p) * 0.5;
         lo = [lo[0].min(p.x - r), lo[1].min(p.y - r)];
         hi = [hi[0].max(p.x + r), hi[1].max(p.y + r)];
     }
@@ -253,6 +254,7 @@ pub fn transformed(stroke: &Stroke, m: Affine) -> Stroke {
     let mut out = stroke.clone();
     for p in out.points.iter_mut() {
         let (x, y) = m.apply(p.x, p.y);
+        p.width_offset *= k;
         p.x = x;
         p.y = y;
     }
@@ -319,6 +321,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -347,6 +350,7 @@ mod tests {
             x: 10.0,
             y: 4.0,
             pressure: 0.75,
+            width_offset: 0.0,
             pen: Default::default(),
         });
         let (projected, view) =
@@ -397,6 +401,7 @@ mod tests {
                     x: x as f32 * 10.0,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
                 0.1,

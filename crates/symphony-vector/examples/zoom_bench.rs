@@ -19,6 +19,7 @@ fn main() {
                     x: -900.0 + (i % 30) as f32 * 60.0 + k as f32 * 3.0,
                     y: -500.0 + (i / 30) as f32 * 50.0 + (k as f32 * 0.4).sin() * 12.0,
                     pressure: 0.5 + 0.5 * (k as f32 * 0.2).sin(),
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),

@@ -208,6 +208,7 @@ fn line_points(d: &LineDraft, step: f32) -> Vec<Point> {
                 x,
                 y,
                 pressure: d.pressure,
+                width_offset: 0.0,
                 pen: Default::default(),
             }
         })
@@ -1490,15 +1491,16 @@ pub fn ui(
         {
             let m = view.compose(layer_world);
             for (id, i) in &s.line_points {
-                let Some(p) = d
-                    .strokes
-                    .iter()
-                    .find(|st| st.id == *id)
-                    .and_then(|st| st.points.get(*i))
-                else {
+                let Some(p) = d.strokes.iter().find(|st| st.id == *id).and_then(|st| {
+                    if st.shape.is_empty() {
+                        st.points.get(*i).map(|p| [p.x, p.y])
+                    } else {
+                        st.shape.iter().flatten().nth(*i).copied()
+                    }
+                }) else {
                     continue;
                 };
-                let at = to_pos(m.apply(p.x, p.y));
+                let at = to_pos(m.apply(p[0], p[1]));
                 painter.circle_filled(at, 4.5, theme::BG_BASE);
                 painter.circle_filled(at, 3.0, theme::ACCENT_SELECT);
             }
@@ -1724,6 +1726,7 @@ pub fn ui(
                         x,
                         y,
                         pressure: pressure_curve(sm.pressure, s.pressure_gamma),
+                        width_offset: 0.0,
                         pen: symphony_core::stroke::Pen::from_tilt(
                             sm.tilt_x,
                             sm.tilt_y,
@@ -1795,6 +1798,7 @@ pub fn ui(
                         x,
                         y,
                         pressure: pressure_curve(sm.pressure, s.pressure_gamma),
+                        width_offset: 0.0,
                         pen: symphony_core::stroke::Pen::from_tilt(
                             sm.tilt_x,
                             sm.tilt_y,
@@ -1877,6 +1881,7 @@ pub fn ui(
                             x,
                             y,
                             pressure,
+                            width_offset: 0.0,
                             pen,
                         },
                         a.min_step,
