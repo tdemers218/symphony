@@ -2483,6 +2483,26 @@ impl SymphonyApp {
             .words("move reposition rotate scale offset ghost previous next")
             .ctx(&canvas),
         );
+        use views::guides::Perspective;
+        for (mode, title, id) in [
+            (
+                Perspective::OnePoint,
+                "One-point perspective guide",
+                "guide.one-point",
+            ),
+            (
+                Perspective::TwoPoint,
+                "Two-point perspective guide",
+                "guide.two-point",
+            ),
+            (Perspective::Off, "Hide perspective guide", "guide.hide"),
+        ] {
+            out.push(
+                Entry::new(title, Kind::Action, Command::PerspectiveGuide(mode), id)
+                    .words("grid horizon vanishing point drawing")
+                    .ctx(&canvas),
+            );
+        }
         for mode in session::LineSculpt::ALL {
             out.push(
                 Entry::new(
@@ -3031,6 +3051,7 @@ impl SymphonyApp {
                 self.s.line_sculpt = mode;
                 self.s.line_points.clear();
             }
+            Command::PerspectiveGuide(mode) => self.s.guides.perspective = mode,
             Command::ShowOnionAlignment => {
                 self.s.onion.on = true;
                 ctx.data_mut(|data| {

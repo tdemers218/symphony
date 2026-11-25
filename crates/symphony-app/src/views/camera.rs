@@ -840,6 +840,7 @@ fn top_toolbar(
                 });
                 ui.add_space(10.0);
                 art_layer_toolbar(ui, s, profile);
+                s.guides.menu(ui);
                 if !drawing_only {
                     bars_menu(ui, s);
                     ui.toggle_value(render_effects, "Render effects")
@@ -1879,6 +1880,12 @@ pub fn ui(
         );
     }
 
+    s.guides.paint(
+        &painter,
+        view,
+        s.doc.settings.width as f32,
+        s.doc.settings.height as f32,
+    );
     let pen_eraser = samples.last().is_some_and(|l| l.tool == PenTool::Eraser);
     draw_cursor(
         ui,

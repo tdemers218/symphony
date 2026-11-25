@@ -445,6 +445,7 @@ pub struct Session {
     /// Pressure response, as a gamma (E4.1). 1 = linear.
     pub pressure_gamma: f32,
     pub onion: Onion,
+    pub guides: crate::views::guides::Guides,
     /// Harmony's Brush Size Cursor preference (DESIGN D8.11).
     pub brush_size_cursor: bool,
     /// Symphony profile: Brush and Pencil are two modes of one Pen tool
@@ -578,6 +579,7 @@ impl Session {
                 opacity: 0.45,
                 alignment: Default::default(),
             },
+            guides: Default::default(),
             brush_size_cursor: true,
             pen_modes: false,
             light_table: false,

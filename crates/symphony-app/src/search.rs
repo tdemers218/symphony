@@ -20,6 +20,7 @@ pub enum Command {
     OpenPreferences,
     LineSculpt(crate::session::LineSculpt),
     ShowOnionAlignment,
+    PerspectiveGuide(crate::views::guides::Perspective),
     OpenExport(symphony_render::Format),
     Setting(Setting),
     GoToFrame(u32),
