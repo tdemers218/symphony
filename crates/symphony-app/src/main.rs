@@ -301,6 +301,8 @@ struct SymphonyApp {
     profile: Profile,
     use_no_ai: bool,
     pen: Option<PenInput>,
+    /// Pen samples taken early by `raw_input_hook`, for this frame's canvas.
+    pen_backlog: Vec<PenSample>,
     camera: camera::CanvasState,
     drawing: camera::CanvasState,
     function: function::FunctionState,
@@ -624,7 +626,11 @@ impl SymphonyApp {
         cc.egui_ctx
             .send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
         let pen = match PenInput::attach(cc) {
-            Ok(p) => Some(p),
+            Ok(p) => {
+                let ctx = cc.egui_ctx.clone();
+                p.set_waker(move || ctx.request_repaint());
+                Some(p)
+            }
             Err(e) => {
                 eprintln!("Pen input: {e}. Falling back to mouse.");
                 None
@@ -902,6 +908,7 @@ impl SymphonyApp {
             profile,
             use_no_ai,
             pen,
+            pen_backlog: Vec::new(),
             camera: {
                 // SYMPHONY_SHOT_MIRROR: the Camera view mirrored, for review.
                 let mut c = camera::CanvasState::default();
@@ -4371,7 +4378,54 @@ impl eframe::App for SymphonyApp {
         eframe::set_value(storage, eframe::APP_KEY, &saved);
     }
 
+    /// Where the toolkit doesn't see the pen (Wayland), pass pen samples on
+    /// to egui as pointer events, so the pen hovers, clicks and drags in the
+    /// UI like a mouse. The samples themselves still go to the canvas.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(pen) = &self.pen else {
+            return;
+        };
+        // X11 reports the pen in pixels; the backend turns them into points.
+        if let Some(ppp) = raw
+            .viewports
+            .get(&raw.viewport_id)
+            .and_then(|v| v.native_pixels_per_point)
+        {
+            pen.set_scale_factor(f64::from(ppp));
+        }
+        if pen.toolkit_sees_pen() {
+            return;
+        }
+        let samples = pen.drain();
+        let zoom = ctx.zoom_factor();
+        // The keys held last frame; RawInput doesn't carry them itself.
+        let modifiers = ctx.input(|i| i.modifiers);
+        for s in &samples {
+            // The mouse reaches egui through the toolkit already.
+            if s.tool == symphony_pen::Tool::Mouse {
+                continue;
+            }
+            let pos = egui::pos2(s.x as f32 / zoom, s.y as f32 / zoom);
+            raw.events.push(egui::Event::PointerMoved(pos));
+            let pressed = match s.phase {
+                symphony_pen::Phase::Down => true,
+                symphony_pen::Phase::Up => false,
+                _ => continue,
+            };
+            raw.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            });
+        }
+        self.pen_backlog.extend(samples);
+    }
+
     fn on_exit(&mut self) {
+        // Stop pen input while the window's display connection is still
+        // open; the Wayland backend reads it from its own thread.
+        self.pen = None;
         // A clean exit with nothing unsaved needs no recovery file (E7.5).
         if !self.s.dirty() {
             if let Some(r) = &self.recovery {
@@ -4507,7 +4561,11 @@ impl SymphonyApp {
         }
 
         let samples = match &self.pen {
-            Some(p) => p.drain(),
+            Some(p) => {
+                let mut s = std::mem::take(&mut self.pen_backlog);
+                s.extend(p.drain());
+                s
+            }
             None => camera::pointer_samples(&ctx),
         };
         let device = self.pen.as_ref().map(|p| p.device());
@@ -4974,6 +5032,9 @@ impl SymphonyApp {
         self.timing.bookmark_window(&ctx, &mut self.s);
         self.dialogs(&ctx);
 
+        if let Some(pen) = &self.pen {
+            pen.set_cursor(pen_cursor(ctx.output(|o| o.cursor_icon)));
+        }
         let pending = self.pen.as_ref().is_some_and(|p| p.has_pending());
         if pending || self.camera.busy() || self.drawing.busy() {
             ctx.request_repaint();
@@ -4983,6 +5044,50 @@ impl SymphonyApp {
         }
         // Keep autosave ticking even when idle.
         ctx.request_repaint_after(std::time::Duration::from_secs(5));
+    }
+}
+
+/// The pen's cursor for what egui wants this frame. The canvas asks for
+/// none and draws its own.
+fn pen_cursor(icon: egui::CursorIcon) -> symphony_pen::Cursor {
+    use egui::CursorIcon as I;
+    use symphony_pen::Cursor as C;
+    match icon {
+        I::None => C::Hidden,
+        I::Default => C::Default,
+        I::ContextMenu => C::ContextMenu,
+        I::Help => C::Help,
+        I::PointingHand => C::Pointer,
+        I::Progress => C::Progress,
+        I::Wait => C::Wait,
+        I::Cell => C::Cell,
+        I::Crosshair => C::Crosshair,
+        I::Text => C::Text,
+        I::VerticalText => C::VerticalText,
+        I::Alias => C::Alias,
+        I::Copy => C::Copy,
+        I::Move => C::Move,
+        I::NoDrop => C::NoDrop,
+        I::NotAllowed => C::NotAllowed,
+        I::Grab => C::Grab,
+        I::Grabbing => C::Grabbing,
+        I::AllScroll => C::AllScroll,
+        I::ResizeHorizontal => C::ResizeEw,
+        I::ResizeVertical => C::ResizeNs,
+        I::ResizeNeSw => C::ResizeNesw,
+        I::ResizeNwSe => C::ResizeNwse,
+        I::ResizeEast => C::ResizeE,
+        I::ResizeNorth => C::ResizeN,
+        I::ResizeNorthEast => C::ResizeNe,
+        I::ResizeNorthWest => C::ResizeNw,
+        I::ResizeSouth => C::ResizeS,
+        I::ResizeSouthEast => C::ResizeSe,
+        I::ResizeSouthWest => C::ResizeSw,
+        I::ResizeWest => C::ResizeW,
+        I::ResizeColumn => C::ResizeCol,
+        I::ResizeRow => C::ResizeRow,
+        I::ZoomIn => C::ZoomIn,
+        I::ZoomOut => C::ZoomOut,
     }
 }
 

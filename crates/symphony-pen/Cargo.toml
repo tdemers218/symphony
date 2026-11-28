@@ -12,3 +12,14 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["event"] }
+# Same libwayland the window toolkit loads, opened at run time (dlopen), so
+# the app still starts on X11-only systems.
+wayland-client = { version = "0.31", features = ["system", "dlopen"] }
+# "staging" and "unstable" add the cursor-shape protocol, which sets the
+# pen's cursor (its bindings need both). No new crates.
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+# Pure Rust X11 protocol, already in the tree through winit.
+x11rb = { version = "0.13", features = ["xinput"] }
