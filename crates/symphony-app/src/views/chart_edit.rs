@@ -970,11 +970,14 @@ fn bar(
         response.rect.center_bottom() - Vec2::new(0.0, 14.0),
         egui::Align2::CENTER_BOTTOM,
     ));
+    // Concentric: the bar is a capsule whose controls are capsules set
+    // INSET in from every edge, so each inner curve shares its centre
+    // with the outer one (inner radius = outer radius - inset).
     let frame = egui::Frame::new()
         .fill(HUD)
         .stroke(EStroke::new(1.0, HUD_RIM))
-        .corner_radius(14)
-        .inner_margin(egui::Margin::symmetric(8, 4))
+        .corner_radius(BAR_RADIUS)
+        .inner_margin(egui::Margin::same(INSET as i8))
         .shadow(egui::epaint::Shadow {
             offset: [0, 4],
             blur: 14,
@@ -989,17 +992,29 @@ fn bar(
         .show(ui.ctx(), |ui| {
             frame.show(ui, |ui| {
                 // Glass-lite controls: a faint light fill, so each one
-                // reads as something to press, on or off.
+                // reads as something to press, on or off; capsules of
+                // CONTROL height.
                 let control = Color32::from_white_alpha(20);
-                let w = &mut ui.visuals_mut().widgets;
-                w.inactive.weak_bg_fill = control;
-                w.inactive.bg_fill = control;
-                w.inactive.corner_radius = 7.into();
-                w.hovered.corner_radius = 7.into();
-                w.active.corner_radius = 7.into();
-                ui.spacing_mut().button_padding = Vec2::new(8.0, 3.0);
+                let v = ui.visuals_mut();
+                v.selection.bg_fill = theme::ACCENT_SELECT_FILL;
+                v.selection.stroke.color = theme::ON_ACCENT;
+                for w in [
+                    &mut v.widgets.inactive,
+                    &mut v.widgets.hovered,
+                    &mut v.widgets.active,
+                    &mut v.widgets.open,
+                ] {
+                    w.corner_radius = CONTROL_RADIUS.into();
+                    w.expansion = 0.0;
+                }
+                v.widgets.inactive.weak_bg_fill = control;
+                v.widgets.inactive.bg_fill = control;
+                let sp = ui.spacing_mut();
+                sp.button_padding = Vec2::new(10.0, 0.0);
+                sp.interact_size.y = CONTROL;
+                sp.item_spacing = Vec2::splat(INSET);
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.set_min_height(CONTROL);
                     let mut draft = chart.clone();
                     if chart.locked {
                         hint(ui, "Locked");
@@ -1043,7 +1058,121 @@ fn bar(
     shown.response.rect.size()
 }
 
+/// Bar geometry (concentric capsules): controls CONTROL tall with radius
+/// CONTROL_RADIUS, INSET from every edge of the bar and from each other;
+/// the bar's radius is theirs plus INSET.
+const CONTROL: f32 = 22.0;
+const INSET: f32 = 4.0;
+const CONTROL_RADIUS: u8 = 11;
+const BAR_RADIUS: u8 = CONTROL_RADIUS + INSET as u8;
+/// The switch's sliding highlight sits this far inside its track.
+const SWITCH_INSET: f32 = 2.0;
+
+/// A two-way switch as a capsule track with a capsule highlight inset in
+/// it (concentric), sliding between the two (two-way switches slide).
+fn pill_switch<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    salt: &str,
+    current: &mut T,
+    options: [(T, &str); 2],
+) -> bool {
+    let font = theme::body();
+    let galleys = options.map(|(_, label)| {
+        ui.painter()
+            .layout_no_wrap(label.to_owned(), font.clone(), theme::TEXT_PRIMARY)
+    });
+    let widths = galleys.each_ref().map(|g| g.size().x + 20.0);
+    let (track, _) = ui.allocate_exact_size(
+        Vec2::new(widths[0] + widths[1], CONTROL),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter();
+    painter.rect_filled(track, CONTROL_RADIUS, Color32::from_white_alpha(20));
+    let halves = [
+        egui::Rect::from_min_size(track.min, Vec2::new(widths[0], CONTROL)),
+        egui::Rect::from_min_size(
+            track.min + Vec2::new(widths[0], 0.0),
+            Vec2::new(widths[1], CONTROL),
+        ),
+    ];
+    let mut changed = false;
+    let mut chosen = None;
+    for (i, ((value, label), half)) in options.iter().zip(halves).enumerate() {
+        let response = ui
+            .interact(half, ui.scope_id().with((salt, i)), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::RadioButton, true, *current == *value, *label)
+        });
+        if response.clicked() && *current != *value {
+            *current = *value;
+            changed = true;
+        }
+        if *current == *value {
+            chosen = Some(half);
+        }
+    }
+    if let Some(half) = chosen {
+        let origin = track.min.to_vec2();
+        let r = symphony_ui::motion::slide(
+            ui.ctx(),
+            ui.scope_id().with((salt, "highlight")),
+            half.shrink(SWITCH_INSET).translate(-origin),
+        )
+        .translate(origin);
+        ui.painter().rect_filled(
+            r,
+            CONTROL_RADIUS - SWITCH_INSET as u8,
+            theme::ACCENT_SELECT_FILL,
+        );
+    }
+    for (((value, _), half), galley) in options.iter().zip(halves).zip(galleys) {
+        let ink = if *current == *value {
+            theme::ON_ACCENT
+        } else {
+            theme::TEXT_PRIMARY
+        };
+        ui.painter()
+            .galley(half.center() - galley.size() / 2.0, galley, ink);
+    }
+    changed
+}
+
+/// A round icon button, CONTROL across (a capsule's end, concentric with
+/// the bar's).
+fn pill_icon(
+    ui: &mut egui::Ui,
+    icon: symphony_ui::icons::Icon,
+    on: bool,
+    tip: &str,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(CONTROL), egui::Sense::click());
+    let fill = if on {
+        theme::ACCENT_SELECT_FILL
+    } else if response.hovered() {
+        Color32::from_white_alpha(34)
+    } else {
+        Color32::from_white_alpha(20)
+    };
+    ui.painter()
+        .circle_filled(rect.center(), CONTROL / 2.0, fill);
+    let ink = if on {
+        theme::ON_ACCENT
+    } else {
+        theme::TEXT_PRIMARY
+    };
+    symphony_ui::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(rect.center(), Vec2::splat(14.0)),
+        icon,
+        ink,
+    );
+    response.on_hover_text(tip)
+}
+
 fn hint(ui: &mut egui::Ui, text: &str) {
+    // Text sits a capsule's padding in from the bar's round end.
+    ui.add_space(6.0);
     ui.label(
         egui::RichText::new(text)
             .font(theme::dense())
@@ -1058,12 +1187,11 @@ fn bar_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId, show_pose: &mut 
     };
     let (has_prev, next) = (i > 0, c.points.get(i + 1).map(|p| p.frame));
     let mut role = c.points[i].role;
-    if widgets::segmented(
+    if pill_switch(
         ui,
         "chart-bar-role",
         &mut role,
-        &[(Role::Key, "Key"), (Role::Breakdown, "Breakdown")],
-        false,
+        [(Role::Key, "Key"), (Role::Breakdown, "Breakdown")],
     ) {
         c.points[i].role = role;
     }
@@ -1119,11 +1247,10 @@ fn bar_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId, show_pose: &mut 
             };
         }
     }
-    if symphony_ui::icons::button(
+    if pill_icon(
         ui,
         symphony_ui::icons::Icon::RotateRight,
         *show_pose,
-        true,
         "Rotate and scale on this frame",
     )
     .clicked()
