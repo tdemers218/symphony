@@ -35,6 +35,17 @@ impl Shot {
             return;
         }
         ctx.request_repaint();
+        // SYMPHONY_SHOT_SCALE=2: render at twice the size, for sharp images
+        // on high-density screens (pair it with a doubled SHOT_SIZE).
+        // Always set, so one run's scale never carries into the next
+        // through the throwaway state folder.
+        if self.frames == 1 {
+            let z = std::env::var("SYMPHONY_SHOT_SCALE")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(1.0);
+            ctx.set_zoom_factor(z.clamp(0.5, 4.0));
+        }
         // Review sizes (SYMPHONY_SHOT_SIZE=1280x800): resize once the window
         // exists, so a maximised or remembered window can't override it.
         if self.frames == 2 {

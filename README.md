@@ -7,11 +7,12 @@ node-based compositing.
 [Manual](https://tdemers218.github.io/symphony/manual/) ·
 [Preview builds](https://github.com/tdemers218/symphony/releases)
 
-![An empty Symphony scene with the Camera view, drawing tools, colour palette, and Timeline](docs/presentation/workspace.png)
+![Symphony’s default workspace: a red ball mid-bounce following a Smart Chart in the Camera view, with the tools, palette and Timeline around it](docs/presentation/workspace.png)
 
 ## Key features
 
-- **Turn brush tips into editable vectors.** Bring in brushes from Photoshop, Krita, Procreate, and more. Trace imported brush tips into editable outlines you can reshape and recolour. The presentation compares Bitmap and editable Vector strokes rendered in Symphony with Ramón Miranda’s [Sketch V2 for Krita 5](https://krita-artists.org/t/updated-to-include-v3-sketch-v2-sk2-pleasure-to-draw-including-colored-pencils-and-blenders/59552).
+- **Plan motion with Smart Charts.** Click where the artwork is on each key frame: a path runs through the points with a tick for every frame, and a layer follows it. Set slow-ins, holds and breakdowns in a small bar by the point, slide ticks to change the spacing, or draw the path by hand and record its timing as you draw.
+- **Import brushes as editable lines.** Bring in brushes from Photoshop, Krita, MyPaint, Procreate, Clip Studio Paint and GIMP. They become Textured Vector brushes: the tip’s texture on a line you can still reshape and recolour. The presentation compares Textured Vector and Vector strokes rendered in Symphony with Ramón Miranda’s [Sketch V2 for Krita 5](https://krita-artists.org/t/updated-to-include-v3-sketch-v2-sk2-pleasure-to-draw-including-colored-pencils-and-blenders/59552).
 - **Build and pose smart rigs.** Assign drawings to bones in Node Properties. Lock anchor points to keep hands or feet planted, use Aim targets to guide the pose, and tune spring stiffness or stretch on several bones at once.
 - **Sketch in each drawing.** Rough construction stays on a separate art layer and can be included in an export when needed.
 - **Cut along a lasso.** Split strokes or fills along a freehand or point-by-point boundary and move the selected pieces with the traced outline still visible.
@@ -20,7 +21,7 @@ node-based compositing.
 - **Bend a line as you draw.** Hold Alt while drawing with the Line tool to bend the stroke between its endpoints. Hold Shift to snap the angle in 22.5° steps.
 - **Recolour drawings from one swatch.** Edit a scene palette colour once and every stroke or fill linked to it updates together.
 - **Stage a multiplane camera move.** Set depth on drawing pegs and animate the camera for parallax. Maintain Size keeps the drawing in place while you set its depth.
-- **Position artwork with effects paused.** Switch off Render effects while positioning artwork in Camera. Turn off Bars to see artwork outside the frame while keeping exports framed.
+- **Position artwork with effects paused.** Switch off Render effects while positioning artwork in Camera; exports always render them.
 - **Resume an interrupted export.** Restart the same export to reuse finished frames after a crash or cancellation. This works for movies, GIFs, and image sequences.
 - **Untangle a node graph.** Arrange Nodes lays out the graph by signal flow. Select a node to highlight its cables and ports, or drag it to make nearby cards slide out of the way.
 - **Make room for in-betweens.** Insert frames after the playhead. Current exposures hold through the gap, and later exposures and animation keys shift together.

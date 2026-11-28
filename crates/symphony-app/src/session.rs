@@ -658,45 +658,19 @@ impl Session {
         s.rename_layer(0, "Head");
         s.add_layer_named("Body", 1);
         s.add_layer_named("BG", 2);
-        let circle = |cx: f32, cy: f32, r: f32| -> Vec<Point> {
-            (0..=48)
-                .map(|i| {
-                    let t = i as f32 / 48.0 * std::f32::consts::TAU;
-                    Point {
-                        x: cx + r * t.cos(),
-                        y: cy + r * t.sin(),
-                        pressure: 0.55 + 0.45 * (t * 1.5).sin().abs(),
-                        width_offset: 0.0,
-                        pen: Default::default(),
-                    }
-                })
-                .collect()
-        };
-        let line = |pts: &[(f32, f32)]| -> Vec<Point> {
-            pts.iter()
-                .enumerate()
-                .map(|(i, &(x, y))| Point {
-                    x,
-                    y,
-                    pressure: 0.3 + 0.7 * ((i as f32) * 0.9).sin().abs(),
-                    width_offset: 0.0,
-                    pen: Default::default(),
-                })
-                .collect()
-        };
         let art: [(usize, Vec<Vec<Point>>, usize); 3] = [
             (
                 0,
                 vec![
-                    circle(0.0, -180.0, 110.0),
-                    circle(-38.0, -195.0, 12.0),
-                    circle(38.0, -195.0, 12.0),
+                    demo_circle(0.0, -180.0, 110.0),
+                    demo_circle(-38.0, -195.0, 12.0),
+                    demo_circle(38.0, -195.0, 12.0),
                 ],
                 0,
             ),
             (
                 1,
-                vec![line(&[
+                vec![demo_line(&[
                     (-90.0, -60.0),
                     (-120.0, 120.0),
                     (-60.0, 300.0),
@@ -708,7 +682,7 @@ impl Session {
             ),
             (
                 2,
-                vec![line(&[
+                vec![demo_line(&[
                     (-900.0, 380.0),
                     (-300.0, 340.0),
                     (300.0, 360.0),
@@ -718,28 +692,7 @@ impl Session {
             ),
         ];
         for (layer, strokes, swatch) in art {
-            let swatch = s.doc.palette.swatches[swatch].id;
-            for points in strokes {
-                let st = Stroke {
-                    id: s.doc.ids.fresh(),
-                    kind: StrokeKind::Brush,
-                    art: Default::default(),
-                    swatch,
-                    min_width: 1.0,
-                    max_width: 9.0,
-                    points,
-                    tips: Default::default(),
-                    texture: None,
-                    shape: Vec::new(),
-                };
-                s.commit_stroke(layer, 1, st);
-            }
-            let col = s.doc.layers[layer].column;
-            if let Some(d) = s.doc.exposed(layer, 1) {
-                if let Some(c) = s.doc.xsheet.column_mut(col) {
-                    c.expose(d, 1, 48);
-                }
-            }
+            s.put_demo_art(layer, strokes, swatch, 48);
         }
         // Paint the head with skin, so the demo shows ink and paint.
         let line = s.swatch;
@@ -751,6 +704,56 @@ impl Session {
         peg.x.set_key(24, 120.0);
         peg.x.set_key(48, 0.0);
         s.set_peg(0, peg);
+        s.history.clear();
+        s.saved_version = s.doc.version;
+        s
+    }
+
+    /// Brush strokes on `layer`'s drawing at frame 1, held for `frames`.
+    fn put_demo_art(&mut self, layer: usize, strokes: Vec<Vec<Point>>, swatch: usize, frames: u32) {
+        let swatch = self.doc.palette.swatches[swatch].id;
+        for points in strokes {
+            let st = Stroke {
+                id: self.doc.ids.fresh(),
+                kind: StrokeKind::Brush,
+                art: Default::default(),
+                swatch,
+                min_width: 1.0,
+                max_width: 9.0,
+                points,
+                tips: Default::default(),
+                texture: None,
+                shape: Vec::new(),
+            };
+            self.commit_stroke(layer, 1, st);
+        }
+        let col = self.doc.layers[layer].column;
+        if let Some(d) = self.doc.exposed(layer, 1) {
+            if let Some(c) = self.doc.xsheet.column_mut(col) {
+                c.expose(d, 1, frames);
+            }
+        }
+    }
+
+    /// The website's showcase scene: a bouncing ball and the ground. Plain
+    /// shapes on purpose; the public pages show no placeholder character.
+    pub fn showcase_ball() -> Self {
+        let mut s = Self::new_scene();
+        s.doc.settings.length = 36;
+        s.rename_layer(0, "Ball");
+        s.add_layer_named("Ground", 1);
+        // The ball sits where the bounce chart starts (see main.rs).
+        s.put_demo_art(0, vec![demo_circle(-720.0, -200.0, 62.0)], 0, 36);
+        s.put_demo_art(
+            1,
+            vec![demo_line(&[(-900.0, 312.0), (0.0, 308.0), (900.0, 312.0)])],
+            4,
+            36,
+        );
+        let line = s.swatch;
+        s.swatch = s.doc.palette.swatches[5].id;
+        s.paint_at(0, 1, -720.0, -200.0, 1.0);
+        s.swatch = line;
         s.history.clear();
         s.saved_version = s.doc.version;
         s
@@ -4277,6 +4280,36 @@ impl Session {
             );
         }
     }
+}
+
+/// A demo ring of pen points (`demo` and `showcase_ball`).
+fn demo_circle(cx: f32, cy: f32, r: f32) -> Vec<Point> {
+    (0..=48)
+        .map(|i| {
+            let t = i as f32 / 48.0 * std::f32::consts::TAU;
+            Point {
+                x: cx + r * t.cos(),
+                y: cy + r * t.sin(),
+                pressure: 0.55 + 0.45 * (t * 1.5).sin().abs(),
+                width_offset: 0.0,
+                pen: Default::default(),
+            }
+        })
+        .collect()
+}
+
+/// A demo line through `pts`, with varying pressure.
+fn demo_line(pts: &[(f32, f32)]) -> Vec<Point> {
+    pts.iter()
+        .enumerate()
+        .map(|(i, &(x, y))| Point {
+            x,
+            y,
+            pressure: 0.3 + 0.7 * ((i as f32) * 0.9).sin().abs(),
+            width_offset: 0.0,
+            pen: Default::default(),
+        })
+        .collect()
 }
 
 #[cfg(test)]

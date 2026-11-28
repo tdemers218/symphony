@@ -726,6 +726,8 @@ impl SymphonyApp {
         let perf_scene = std::env::var_os("SYMPHONY_PERF_SCENE").is_some();
         let mut s = if perf_scene {
             perf::heavy_scene()
+        } else if shot.is_some() && std::env::var_os("SYMPHONY_SHOT_BALL").is_some() {
+            Session::showcase_ball()
         } else if demo || std::env::var_os("SYMPHONY_DEMO_ART").is_some() {
             Session::demo()
         } else {
@@ -943,6 +945,82 @@ impl SymphonyApp {
                 } else {
                     10
                 };
+            }
+            // SYMPHONY_SHOT_BALL[=edit]: the showcase scene's ball follows a
+            // bounce chart (slow at the top, sharp at each contact). =edit
+            // selects the chart, as while editing it.
+            if let Ok(mode) = std::env::var("SYMPHONY_SHOT_BALL") {
+                use symphony_core::chart::{Chart, Role, Tangent};
+                let mut c = Chart::default();
+                let keys = [
+                    (1, [-720.0, -200.0], false),
+                    (8, [-470.0, 250.0], true),
+                    (15, [-190.0, -40.0], false),
+                    (21, [70.0, 250.0], true),
+                    (27, [300.0, 70.0], false),
+                    (32, [500.0, 250.0], true),
+                    (36, [640.0, 140.0], false),
+                ];
+                for (f, p, _) in keys {
+                    c.set_point(f, p, Role::Key);
+                }
+                for p in &mut c.points {
+                    let contact = keys.iter().any(|k| k.0 == p.frame && k.2);
+                    if contact {
+                        p.tangent = Tangent::Corner;
+                        p.timing.ease_in = 1.0;
+                    } else {
+                        // Level at the top of each bounce.
+                        p.tangent = Tangent::Manual {
+                            before: [-90.0, 0.0],
+                            after: [90.0, 0.0],
+                        };
+                        p.timing.ease_out = 1.0;
+                    }
+                }
+                let mut nodes = views::node::NodeViewState::default();
+                views::node::add_from_search(
+                    &mut s,
+                    &mut nodes,
+                    symphony_core::graph::NodeKind::Chart(Box::new(c)),
+                );
+                if let Some(id) = s.selected_node {
+                    s.set_layer_chart(0, Some(id));
+                    // =drawn: the first stretch drawn by hand, as a loop.
+                    if mode == "drawn" {
+                        let stroke: Vec<[f32; 2]> = (0..=80)
+                            .map(|i| {
+                                let t = i as f32 / 80.0;
+                                let a = t * std::f32::consts::TAU;
+                                [
+                                    -720.0 + t * 250.0 + 150.0 * a.sin(),
+                                    -200.0 + t * 450.0 - 150.0 * (1.0 - a.cos()),
+                                ]
+                            })
+                            .collect();
+                        views::chart_edit::edit(&mut s, id, "Draw chart path", None, |c| {
+                            if let Some(first) = c.points.first().map(|p| p.id) {
+                                c.set_drawn(first, &stroke);
+                            }
+                        });
+                    }
+                    if mode == "edit" || mode == "drawn" {
+                        s.select_graph_node(id, false);
+                    } else {
+                        s.selected_node = None;
+                        s.reveal_node_track = None;
+                        s.selected = 0;
+                    }
+                }
+                s.history.clear();
+                s.saved_version = s.doc.version;
+            }
+            // SYMPHONY_SHOT_FRAME=<n>: the playhead's frame.
+            if let Some(f) = std::env::var("SYMPHONY_SHOT_FRAME")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+            {
+                s.frame = f.max(1);
             }
             if std::env::var_os("SYMPHONY_SHOT_PAINT").is_some() {
                 s.tool = Tool::Paint;
@@ -5267,6 +5345,21 @@ impl SymphonyApp {
             });
         self.show_licences = open;
         self.file_drops(&ctx);
+        // Screenshot mode: SYMPHONY_SHOT_MAX=<view title> fills the window
+        // with that view (Maximise view), for close-up shots.
+        if self.shot.is_some() {
+            if let (None, Ok(name)) = (self.maximised, std::env::var("SYMPHONY_SHOT_MAX")) {
+                self.maximised = View::ALL.into_iter().find(|v| v.title() == name);
+            }
+            // SYMPHONY_SHOT_ZOOM=<percent>: the canvas zoom.
+            if let Some(z) = std::env::var("SYMPHONY_SHOT_ZOOM")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+            {
+                self.camera.set_zoom(z / 100.0);
+                self.drawing.set_zoom(z / 100.0);
+            }
+        }
         // Screenshot mode: SYMPHONY_SHOT_MANUAL=<page>[#heading] opens the
         // Manual there.
         if let (Some(_), Ok(target)) = (&self.shot, std::env::var("SYMPHONY_SHOT_MANUAL")) {

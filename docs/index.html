@@ -120,10 +120,25 @@
       border-radius: 8px;
       background: var(--panel);
     }
+    .lede { max-width: 62ch; margin: -6px 0 26px; font-size: 1.05rem; }
+    .more { display: inline-block; margin-top: 8px; font-size: .9rem; }
+    .small-features, .essentials {
+      margin: 32px 0 0; padding: 0; list-style: none;
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 25px;
+      color: var(--muted);
+    }
+    .essentials { margin-top: 0; }
+    .small-features strong, .essentials strong { color: var(--ink); }
+    .essentials li { padding-left: 16px; position: relative; }
+    .essentials li::before {
+      content: ""; position: absolute; left: 0; top: .62em;
+      width: 6px; height: 6px; border-radius: 50%; background: var(--focus);
+    }
     footer { border-top: 1px solid #303336; font-size: .85rem; }
     @media (max-width: 640px) {
       .wrap { width: calc(100% - 28px); }
       dl { grid-template-columns: 1fr; gap: 18px; }
+      .small-features, .essentials { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -136,109 +151,89 @@
   <main class="wrap">
     <header class="intro">
       <h1>Symphony</h1>
-      <p>Free, open-source 2D animation software.</p>
+      <p>Free, open-source 2D animation software. Draw frame by frame, time it on a Timeline or Xsheet, rig it, and composite it in nodes.</p>
       <a class="download" id="download" href="https://github.com/tdemers218/symphony/releases">Get the preview build</a>
       <p class="get-more" id="get-more" hidden></p>
     </header>
     <figure>
       <div class="preview">
-        <img src="presentation/workspace.png" width="2880" height="1800" alt="Symphony’s empty Camera view, with drawing tools and colour controls beside it and the Timeline below.">
+        <img src="presentation/workspace.png" width="1904" height="1050" alt="Symphony’s default workspace: a red ball mid-bounce in the Camera view, following a faint Smart Chart path, with drawing tools on the left, brush settings and the colour palette on the right, and the Timeline below.">
       </div>
-      <figcaption>A new scene in Symphony’s default workspace.</figcaption>
+      <figcaption>A bouncing ball following its Smart Chart, in Symphony’s default workspace.</figcaption>
     </figure>
-    <section aria-labelledby="features">
-      <h2 id="features">What you can do in Symphony</h2>
+
+    <section aria-labelledby="charts">
+      <h2 id="charts">Smart Charts: timing charts that move your artwork</h2>
+      <p class="lede">Animators plan motion with timing charts: the path, the key poses, a tick for every frame. In Symphony the chart lives on the canvas and drives the layer, so you change the timing by moving ticks instead of retyping keys.</p>
       <dl class="feature-demos">
         <div>
-          <dt>Turn brush tips into editable vectors</dt>
+          <dt>Chart it, then let the layer follow</dt>
           <dd>
-            Import brushes from Photoshop, Krita, and Procreate. Use Bitmap to keep the imported texture or Vector for editable outlines you can reshape and recolour. Both columns show the same pressure sweep rendered by Symphony with Ramón Miranda’s <a href="https://krita-artists.org/t/updated-to-include-v3-sketch-v2-sk2-pleasure-to-draw-including-colored-pencils-and-blenders/59552">Sketch V2 for Krita 5</a> presets.
+            On each key frame, click where the artwork is. A path runs through the points with a tick for every frame: close ticks are slow, far-apart ticks are fast. Tick <em>follows this chart</em> and the layer’s peg rides it, turning and scaling with it unless you switch that off.
+            <picture>
+              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/smart-charts.png">
+              <img src="presentation/smart-charts.gif" width="720" height="400" loading="lazy" alt="A red ball bounces three times along a faint lilac chart path, slowing at the top of each arc.">
+            </picture>
+            <a class="more" href="manual/smart-charts.html">How Smart Charts work</a>
+          </dd>
+        </div>
+        <div>
+          <dt>Shape the spacing where you see it</dt>
+          <dd>
+            On a point’s frame, a small bar sits beside it: Key or Breakdown, slow In and Out, Hold, and Line for a straight stretch. Slide any tick along the path to change where the chart is on that frame. Each chart gets its own colour, in the same order in every scene.
+            <img src="presentation/chart-timing.png" width="720" height="400" loading="lazy" alt="The bounce chart’s top point is selected. A bar beside it shows Key, Breakdown, In 100%, Out 100%, Hold, Line, rotate, pencil and More; the ticks bunch up near the top of each arc.">
+          </dd>
+        </div>
+        <div>
+          <dt>Draw the path, and its timing with it</dt>
+          <dd>
+            Turn on the pencil and draw from one point to the next. Symphony smooths the stroke and fits it with as few clean curves as it needs, joining the curves on either side without a corner. Turn on Timing too, and the speed you drew at becomes the spacing.
+            <img src="presentation/chart-drawn.png" width="720" height="400" loading="lazy" alt="The first stretch of the bounce chart is drawn by hand as a loop-the-loop. The point’s bar shows Drawn selected.">
+          </dd>
+        </div>
+        <div>
+          <dt>Keys where the chart is</dt>
+          <dd>
+            In the Symphony profile, while a chart is edited, Shift+B switches a point between key and breakdown, Shift+H holds, [ and ] move the whole chart a frame earlier or later, and the arrows nudge the point. Drag the chart’s bar on the Timeline to retime all of it, and Insert in-betweens stretches it with the scene. Charts never appear in exports.
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <section aria-labelledby="features">
+      <h2 id="features">More you won’t find elsewhere</h2>
+      <dl class="feature-demos">
+        <div>
+          <dt>Tab Search, and keys that fit the panel</dt>
+          <dd>
+            Press Tab and type what you want: an action, a node to add, a layer, a colour, a brush, a page of the manual, or “insert 3 frames”. Results for the panel you’re in come first, and you can remap any shortcut from there. In the Symphony profile, one letter does the right thing for the panel under the pointer: D is the Dropper over a drawing and Duplicate Drawing over the Timeline. Prefer Harmony’s own shortcuts? Switch to the Harmony profile.
+            <picture>
+              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/tab-search.png">
+              <img src="presentation/tab-search.gif" width="720" height="400" loading="lazy" alt="Tab Search shows commands for Duplicate Drawing and Add Blur over an empty scene.">
+            </picture>
+          </dd>
+        </div>
+        <div>
+          <dt>Your brushes, as editable lines</dt>
+          <dd>
+            Import brushes from Photoshop, Krita, MyPaint, Procreate, Clip Studio Paint and GIMP. They become Textured Vector brushes: the tip’s texture on a line you can still move, reshape and recolour. Shown with Ramón Miranda’s <a href="https://krita-artists.org/t/updated-to-include-v3-sketch-v2-sk2-pleasure-to-draw-including-colored-pencils-and-blenders/59552">Sketch V2 for Krita 5</a>.
             <picture>
               <source media="(prefers-reduced-motion: reduce)" srcset="presentation/editable-brush-tips.png">
-              <img src="presentation/editable-brush-tips.gif" width="720" height="400" loading="lazy" alt="Four imported Sketch V2 presets drawn with the same pressure sweep in Bitmap and Editable vector modes.">
+              <img src="presentation/editable-brush-tips.gif" width="720" height="400" loading="lazy" alt="Four imported Sketch V2 presets drawn with the same pressure sweep as Textured Vector and as Vector lines.">
             </picture>
           </dd>
         </div>
         <div>
-          <dt>Build and pose a smart rig</dt>
+          <dt>Rigs that keep feet planted</dt>
           <dd>
-            Set up bones and assign drawings from Node Properties. Plant a hand or foot with a locked anchor, use Aim to guide the rig, and adjust spring stiffness or stretch for shoulders, hips, and limbs. Shift-click bones to edit their shared settings together.
+            Build a skeleton in its own setup view, then pose it in Camera. Lock a hand or foot with an anchor, aim a limb at a target, make a two-bone smart joint, and flip which way an elbow bends. Vector artwork bends at the joints.
             <img src="presentation/skeleton-setup.png" width="720" height="400" loading="lazy" alt="Symphony’s Skeleton Setup shows the shoulder, elbow and hand bones of an arm rig.">
-          </dd>
-        </div>
-        <div>
-          <dt>Sketch inside the drawing</dt>
-          <dd>
-            Keep rough construction on each drawing’s Sketch art layer. It shows at reduced opacity while you work on line or colour art. Enable Include Sketch when you want the rough pass in an export.
-          </dd>
-        </div>
-        <div>
-          <dt>Cut artwork along your lasso</dt>
-          <dd>
-            Trace a boundary around part of a stroke or fill. Cutter splits the artwork and selects the pieces inside, keeping your traced outline visible while you move the selection.
-          </dd>
-        </div>
-        <div>
-          <dt>Use the same key in different panels</dt>
-          <dd>
-            In the Symphony shortcut preset, the panel under the pointer decides what a letter does. Press D to pick the Dropper over Drawing or duplicate a drawing over the Timeline. Tab Search shows each binding and lets you remap it.
-            <img src="presentation/contextual-shortcuts.png" width="720" height="400" loading="lazy" alt="Searching for duplicate drawing shows Duplicate Drawing on D and Clone Drawing on C.">
-          </dd>
-        </div>
-        <div>
-          <dt>Reuse a drawing or make it independent</dt>
-          <dd>
-            Clone an exposure to keep a linked drawing as you revise it, or duplicate it to make a separate version. The Timeline frame ruler stays visible while you scroll the layer stack.
-          </dd>
-        </div>
-        <div>
-          <dt>Bend a line as you draw</dt>
-          <dd>
-            Hold Alt while drawing with the Line tool to bend the stroke between its endpoints. Hold Shift to snap the angle in 22.5° steps.
-            <picture>
-              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/bend-a-line.png">
-              <img src="presentation/bend-a-line.gif" width="720" height="400" loading="lazy" alt="The Line tool draws a straight stroke, then bends it into an arc between the same endpoints.">
-            </picture>
-          </dd>
-        </div>
-        <div>
-          <dt>Recolour drawings from one swatch</dt>
-          <dd>
-            Edit a scene palette colour once and every stroke or fill linked to it updates together.
-          </dd>
-        </div>
-        <div>
-          <dt>Stage a multiplane camera move</dt>
-          <dd>
-            Set depth on drawing pegs and animate the camera for parallax. Maintain Size keeps the drawing in place while you set its depth.
-          </dd>
-        </div>
-        <div>
-          <dt>Position artwork with effects paused</dt>
-          <dd>
-            Switch off Render effects while positioning artwork in Camera. Turn off Bars to see artwork outside the frame while keeping exports framed.
-          </dd>
-        </div>
-        <div>
-          <dt>Resume an interrupted export</dt>
-          <dd>
-            Restart the same export to reuse finished frames after a crash or cancellation. This works for movies, GIFs, and image sequences.
-          </dd>
-        </div>
-        <div>
-          <dt>Untangle a node graph</dt>
-          <dd>
-            Arrange Nodes lays out the graph by signal flow. Select a node to highlight its cables and ports, or drag it to make nearby cards slide out of the way.
-            <picture>
-              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/node-layout.png">
-              <img src="presentation/node-layout.gif" width="720" height="400" loading="lazy" alt="Arrange Nodes sorts a cluttered graph into rows so the connections are easier to follow.">
-            </picture>
           </dd>
         </div>
         <div>
           <dt>Make room for in-betweens</dt>
           <dd>
-            Insert frames after the playhead. Current exposures hold through the gap, and later exposures and animation keys shift together.
+            Insert frames after the playhead across the whole scene. Drawings hold through the gap, and later exposures, keys, bookmarks and Smart Charts move together.
             <picture>
               <source media="(prefers-reduced-motion: reduce)" srcset="presentation/insert-in-betweens.png">
               <img src="presentation/insert-in-betweens.gif" width="720" height="400" loading="lazy" alt="Eight frames are inserted at the playhead and the held exposures and later keys move together.">
@@ -246,36 +241,78 @@
           </dd>
         </div>
         <div>
-          <dt>Choose a separate movie frame rate</dt>
+          <dt>Bend a line as you draw</dt>
           <dd>
-            Animate at your scene’s frame rate and choose a different rate for the movie export. Symphony resamples the timing to keep the shot’s duration.
+            Hold Alt while drawing with the Line tool to bend the stroke between its ends. Hold Shift to snap the angle to 22.5° steps.
+            <picture>
+              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/bend-a-line.png">
+              <img src="presentation/bend-a-line.gif" width="720" height="400" loading="lazy" alt="The Line tool draws a straight stroke, then bends it into an arc between the same endpoints.">
+            </picture>
+          </dd>
+        </div>
+        <div>
+          <dt>Untangle a node graph</dt>
+          <dd>
+            Arrange Nodes lays the graph out by signal flow. Select a node to light up its cables, or drag it and nearby cards slide out of the way. Alt-drag a node onto a cable to insert it.
+            <picture>
+              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/node-layout.png">
+              <img src="presentation/node-layout.gif" width="720" height="400" loading="lazy" alt="Arrange Nodes sorts a cluttered graph into rows so the connections are easier to follow.">
+            </picture>
+          </dd>
+        </div>
+        <div>
+          <dt>Deliver at another frame rate</dt>
+          <dd>
+            Animate at the scene’s rate and export the movie at a different one. Symphony samples the timing so the shot keeps its length. If an export is interrupted, run it again and it reuses the finished frames.
             <picture>
               <source media="(prefers-reduced-motion: reduce)" srcset="presentation/movie-cadence.png">
               <img src="presentation/movie-cadence.gif" width="720" height="400" loading="lazy" alt="The Export Movie dialog switches from the 24 fps scene rate to 48 fps.">
             </picture>
           </dd>
         </div>
-        <div>
-          <dt>Turn a drawing into an editable matte</dt>
-          <dd>
-            Switch a drawing to a mask and back while keeping its artwork, exposures, and node connections.
-          </dd>
-        </div>
-        <div>
-          <dt>Find actions with Tab Search</dt>
-          <dd>
-            Type what you want to do. Results prioritize the panel you’re working in, from adding an effect to running a timing command. Short queries work for finding tools and effects by name.
-            <picture>
-              <source media="(prefers-reduced-motion: reduce)" srcset="presentation/tab-search.png">
-              <img src="presentation/tab-search.gif" width="720" height="400" loading="lazy" alt="Tab Search shows commands for Duplicate Drawing and Add Blur over an empty scene.">
-            </picture>
-          </dd>
-        </div>
       </dl>
+      <ul class="small-features">
+        <li><strong>Sketch art layer.</strong> Rough construction under the line and colour art, faint while you ink, left out of exports unless you include it.</li>
+        <li><strong>Cutter.</strong> Split strokes and fills along a lasso and move the pieces inside.</li>
+        <li><strong>Onion-skin alignment.</strong> Slide or turn the previous and next drawings to compare poses that moved across the screen.</li>
+        <li><strong>Mesh Warp by points.</strong> Pin points on the artwork and bend it as rigidly as it can, moving only what’s connected.</li>
+        <li><strong>Timeline bookmarks.</strong> Name a frame or a range, colour it, add notes, and jump there from Search.</li>
+        <li><strong>A manual inside the app.</strong> Help → Manual, or search any topic with Tab. The same pages are <a href="manual/">on the web</a>.</li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="essentials">
+      <h2 id="essentials">The essentials, the way Harmony does them</h2>
+      <p class="lede">Harmony habits carry over, and a Harmony shortcut profile follows Harmony 27’s published defaults.</p>
+      <ul class="essentials">
+        <li>Camera, Drawing, Timeline, Xsheet, Node and Function views in workspaces you rearrange</li>
+        <li>Vector Brush, Pencil, Line, Text and Eraser with pen pressure and tilt (macOS today)</li>
+        <li>Line Art and Colour Art, with Overlay and Underlay if you want them</li>
+        <li>Palettes linked by colour: edit a swatch and every stroke and fill using it changes</li>
+        <li>Paint, Paint Unpainted, Repaint and Unpaint, Close Gap and protected colours</li>
+        <li>Exposures, holds, drawing substitution, clones and onion skin</li>
+        <li>Pegs with keys and Bézier, linear or stop-motion curves</li>
+        <li>Multiplane depth with a 3D View and camera moves</li>
+        <li>Masks, blurs, grain and 20 blend modes in the node graph</li>
+        <li>Import of PSD, Krita, OpenRaster, SVG, image sequences, video and sound</li>
+        <li>Export to GIF, PNG sequence and H.264 movie</li>
+        <li>Autosave every two minutes, with recovery after a crash</li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="next">
+      <h2 id="next">What’s coming</h2>
+      <ul class="essentials">
+        <li><strong>Draw on your tablet.</strong> Use an iPad with Apple Pencil or an Android tablet with S Pen as a drawing surface and control panel for Symphony, over your own network.</li>
+        <li><strong>Tracking built on Smart Charts.</strong> Charts that guide in-betweening, texture and lighting.</li>
+        <li><strong>Pressure on Windows and Linux.</strong> Windows Ink, Wintab, Wayland and X11.</li>
+        <li><strong>More of Harmony.</strong> The Ink tool, gradients, the Library, more deformers and effects, scripting.</li>
+      </ul>
+      <p><a class="more" href="manual/planned.html">Everything that’s planned</a></p>
     </section>
   </main>
   <footer class="wrap">
-    <span>GPL-3.0-or-later</span>
+    <span>GPL-3.0-or-later · Not affiliated with Toon Boom</span>
     <a href="manual/">Manual</a>
     <a href="https://github.com/tdemers218/symphony/blob/main/docs/TESTERS.md">Testing guide</a>
   </footer>
