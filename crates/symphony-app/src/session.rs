@@ -528,6 +528,8 @@ pub struct Session {
     drawing_clipboard: Option<symphony_core::stroke::Drawing>,
     /// Colour zones copied with the strokes.
     pub clipboard_fills: Vec<symphony_core::stroke::Fill>,
+    /// A Smart Chart point copied with Copy while a chart is edited.
+    pub chart_clipboard: Option<symphony_core::chart::ChartPoint>,
     /// The Text tool's font, size, style and alignment.
     pub text_style: crate::vector_import::TextStyle,
     /// Last action, for the status bar ("Undo Brush stroke").
@@ -642,6 +644,7 @@ impl Session {
             clipboard: Vec::new(),
             drawing_clipboard: None,
             clipboard_fills: Vec::new(),
+            chart_clipboard: None,
             text_style: Default::default(),
             animate: true,
             notice: None,
@@ -1984,6 +1987,88 @@ impl Session {
         zones.reverse();
         edits.extend(zones);
         self.history.apply(&mut self.doc, "Delete", edits);
+    }
+
+    /// The chart being edited on the canvas: selected, with Transform.
+    pub fn edited_chart(&self) -> Option<NodeId> {
+        let id = self
+            .selected_node
+            .filter(|_| self.tool == Tool::Transform)?;
+        matches!(self.doc.graph.node(id)?.kind, NodeKind::Chart(_)).then_some(id)
+    }
+
+    fn edited_chart_data(&self) -> Option<(NodeId, &symphony_core::chart::Chart)> {
+        let id = self.edited_chart()?;
+        match &self.doc.graph.node(id)?.kind {
+            NodeKind::Chart(c) => Some((id, c)),
+            _ => None,
+        }
+    }
+
+    /// Copy while editing a chart: its point on this frame, or where the
+    /// chart is on this frame as a new key. False when no chart is edited.
+    pub fn copy_chart_point(&mut self) -> bool {
+        use symphony_core::chart::{ChartCurve, Role};
+        let Some((_, chart)) = self.edited_chart_data() else {
+            return false;
+        };
+        let point = chart.point_on(self.frame).cloned().or_else(|| {
+            let pos = ChartCurve::new(chart).position(self.frame as f32)?;
+            let mut scratch = symphony_core::chart::Chart::default();
+            let id = scratch.set_point(self.frame, pos, Role::Key);
+            scratch.point(id).cloned()
+        });
+        match point {
+            Some(p) => {
+                self.note(format!("Copied the chart's point on frame {}", p.frame));
+                self.chart_clipboard = Some(p);
+            }
+            None => self.note("This chart has no points to copy yet."),
+        }
+        true
+    }
+
+    /// Paste while editing a chart: the copied point's position, kind and
+    /// handles on this frame (replacing a point already there). False when
+    /// no chart is edited.
+    pub fn paste_chart_point(&mut self) -> bool {
+        let Some((id, chart)) = self.edited_chart_data() else {
+            return false;
+        };
+        if chart.locked {
+            self.note("This chart is locked.");
+            return true;
+        }
+        let Some(copied) = self.chart_clipboard.clone() else {
+            self.note("Copy a chart point first.");
+            return true;
+        };
+        let frame = self.frame;
+        crate::views::chart_edit::edit(self, id, "Paste chart point", None, |c| {
+            let pid = c.set_point(frame, copied.pos, copied.role);
+            if let Some(p) = c.point_mut(pid) {
+                p.tangent = copied.tangent;
+            }
+        });
+        true
+    }
+
+    /// Delete while editing a chart: its point on this frame. False when
+    /// no chart is edited.
+    pub fn delete_chart_point(&mut self) -> bool {
+        let Some((id, chart)) = self.edited_chart_data() else {
+            return false;
+        };
+        if let Some(pid) = chart
+            .point_on(self.frame)
+            .filter(|_| !chart.locked)
+            .map(|p| p.id)
+        {
+            crate::views::chart_edit::edit(self, id, "Delete chart point", None, |c| {
+                c.remove_point(pid);
+            });
+        }
+        true
     }
 
     pub fn copy_selection(&mut self) {
@@ -4497,6 +4582,53 @@ mod tests {
         s.undo();
         assert_eq!(s.layer_chart(s.selected), None);
         assert_eq!(at(&s, 9), 0.0);
+    }
+
+    /// Copy and paste repeat a pose: the point on frame 1 pasted on
+    /// frame 17 closes a cycle; with no point on the frame, Copy takes
+    /// where the chart is. Delete removes the frame's point.
+    #[test]
+    fn chart_points_copy_paste_and_delete() {
+        let mut s = Session::new_scene();
+        let mut nodes = crate::views::node::NodeViewState::default();
+        crate::views::node::add_from_search(&mut s, &mut nodes, crate::views::node::smart_chart());
+        let id = s.selected_node.unwrap();
+        assert_eq!(s.edited_chart(), Some(id));
+        s.frame = 1;
+        crate::views::chart_edit::place(&mut s, id, [10.0, 20.0]);
+        s.frame = 9;
+        crate::views::chart_edit::place(&mut s, id, [90.0, 20.0]);
+        let points = |s: &Session| match &s.doc.graph.node(id).unwrap().kind {
+            NodeKind::Chart(c) => c
+                .points
+                .iter()
+                .map(|p| (p.frame, p.pos))
+                .collect::<Vec<_>>(),
+            _ => unreachable!(),
+        };
+        s.frame = 1;
+        assert!(s.copy_chart_point());
+        s.frame = 17;
+        assert!(s.paste_chart_point());
+        assert_eq!(points(&s)[2], (17, [10.0, 20.0]));
+        // Between points: Copy takes where the chart is now.
+        s.frame = 5;
+        s.copy_chart_point();
+        let copied = s
+            .chart_clipboard
+            .as_ref()
+            .map(|p| (p.frame, p.pos))
+            .unwrap();
+        assert_eq!(copied.0, 5);
+        assert!((copied.1[1] - 20.0).abs() < 1.0 && (copied.1[0] - 50.0).abs() < 5.0);
+        s.frame = 9;
+        assert!(s.delete_chart_point());
+        assert_eq!(points(&s).len(), 2);
+        s.undo();
+        assert_eq!(points(&s).len(), 3);
+        // Not editing a chart: the usual Copy.
+        s.tool = Tool::Brush;
+        assert!(!s.copy_chart_point());
     }
 
     fn line(s: &mut Session, x0: f32, x1: f32) -> Stroke {

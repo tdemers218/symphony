@@ -388,6 +388,31 @@ impl Chart {
     /// keys on or after it move later. A segment that spans the gap gets
     /// longer and keeps its shape and spacing (timing is a fraction of
     /// the segment, so it stretches with it).
+    /// Move the whole chart `delta` frames later (negative: earlier),
+    /// points and channel keys together, never before frame 1. Returns
+    /// how far it actually moved.
+    pub fn shift_frames(&mut self, delta: i64) -> i64 {
+        let Some(first) = self.key_frames().min() else {
+            return 0;
+        };
+        let delta = delta.max(1 - i64::from(first));
+        if delta == 0 {
+            return 0;
+        }
+        let shift = |f: &mut u32| *f = (i64::from(*f) + delta).clamp(1, i64::from(u32::MAX)) as u32;
+        for p in &mut self.points {
+            shift(&mut p.frame);
+        }
+        for v in self.scale.iter_mut().chain([&mut self.rotation]) {
+            if let Value::Keys(keys) = v {
+                for k in keys.iter_mut() {
+                    shift(&mut k.frame);
+                }
+            }
+        }
+        delta
+    }
+
     pub fn insert_frames(&mut self, from: u32, count: u32) {
         let later = |f: &mut u32| {
             if *f >= from {
@@ -1193,6 +1218,28 @@ mod tests {
 
     /// Inserting frames inside the chart moves the later points and keys
     /// and stretches the segment that spans the gap, keeping its path.
+    #[test]
+    fn shifting_moves_the_whole_chart_in_time_but_not_before_frame_one() {
+        let mut c = Chart::default();
+        c.set_point(3, [0.0, 0.0], Role::Key);
+        c.set_point(9, [60.0, 0.0], Role::Key);
+        c.set_rotation(9, 45.0);
+        let before = ChartCurve::new(&c).position(6.0);
+        assert_eq!(c.shift_frames(4), 4);
+        assert_eq!(
+            c.points.iter().map(|p| p.frame).collect::<Vec<_>>(),
+            vec![7, 13]
+        );
+        assert_eq!(ChartCurve::new(&c).position(10.0), before);
+        assert!(c.rotation.has_key(13));
+        assert_eq!(c.shift_frames(-100), -6);
+        assert_eq!(
+            c.points.iter().map(|p| p.frame).collect::<Vec<_>>(),
+            vec![1, 7]
+        );
+        assert_eq!(c.shift_frames(-1), 0);
+    }
+
     #[test]
     fn inserted_frames_stretch_the_chart_in_time() {
         let mut c = Chart::default();

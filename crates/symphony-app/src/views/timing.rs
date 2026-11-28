@@ -32,6 +32,9 @@ pub struct TimingState {
     /// A layer being dragged to a new place in the stack (its row).
     layer_drag: Option<usize>,
     scrubbing: bool,
+    /// A Smart Chart being slid along the Timeline: its node, the frame
+    /// the press was on, and how far it has moved so far.
+    chart_drag: Option<(NodeId, u32, i64)>,
     /// Layer order last frame (columns), and layers that just arrived or
     /// moved with when, so their row glows briefly.
     last_order: Vec<symphony_core::id::Id>,
@@ -1304,6 +1307,19 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                     theme::TEXT_SECONDARY,
                     HEAD - 30.0 - indent,
                 );
+                // A chart's span: what you grab to move it in time.
+                if let Some(symphony_core::graph::NodeKind::Chart(chart)) =
+                    s.doc.graph.node(*node).map(|n| &n.kind)
+                {
+                    if let (Some(&a), Some(&b)) = (frames.first(), frames.last()) {
+                        let colour = super::chart_edit::colour(chart, *node);
+                        let span = Rect::from_min_max(
+                            Pos2::new(frame_x(a.min(len)) + 2.0, y + rh / 2.0 - 5.0),
+                            Pos2::new(frame_x(b.min(len)) + cw - 2.0, y + rh / 2.0 + 5.0),
+                        );
+                        painter.rect_filled(span, 5.0, colour.gamma_multiply(0.28));
+                    }
+                }
                 for f in frames.iter().copied().filter(|f| (1..=len).contains(f)) {
                     key_diamond(
                         &painter,
@@ -1358,12 +1374,61 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                     theme::ACCENT_TIME.gamma_multiply(0.16),
                 );
             }
+            // A chart's track between its first and last frame is a handle
+            // for the whole chart: drag it to move the chart in time.
+            let chart_span_at = |p: Pos2| -> Option<(NodeId, u32)> {
+                if p.x < o.x + HEAD || p.y < ruler_bottom {
+                    return None;
+                }
+                let slot = ((p.y - o.y - header_height) / rh).floor();
+                if slot < 0.0 {
+                    return None;
+                }
+                let j = node_slot.iter().position(|&n| n == slot as usize)?;
+                let (id, _, frames) = &node_tracks[j];
+                let s_node = s.doc.graph.node(*id)?;
+                if !matches!(s_node.kind, symphony_core::graph::NodeKind::Chart(_)) {
+                    return None;
+                }
+                let frame = ((p.x - o.x - HEAD) / cw).floor() as i64 + 1;
+                let (first, last) = (*frames.first()?, *frames.last()?);
+                (i64::from(first)..=i64::from(last))
+                    .contains(&frame)
+                    .then_some((*id, frame as u32))
+            };
             // Determine the gesture from the press, even when its current
             // pointer has crossed into the headers or past the last frame.
             if resp.drag_started_by(egui::PointerButton::Primary) {
-                t.scrubbing = ui
-                    .input(|i| i.pointer.press_origin())
-                    .is_some_and(|p| p.x >= o.x + HEAD && p.y >= ruler_top);
+                let origin = ui.input(|i| i.pointer.press_origin());
+                t.chart_drag = origin
+                    .and_then(chart_span_at)
+                    .map(|(id, frame)| (id, frame, 0));
+                t.scrubbing = t.chart_drag.is_none()
+                    && origin.is_some_and(|p| p.x >= o.x + HEAD && p.y >= ruler_top);
+            }
+            if let Some((id, from, moved)) = &mut t.chart_drag {
+                if let Some(p) = resp.interact_pointer_pos() {
+                    let frame = ((p.x - o.x - HEAD) / cw).floor() as i64 + 1;
+                    let step = frame - i64::from(*from) - *moved;
+                    if step != 0 {
+                        let mut done = 0;
+                        super::chart_edit::edit(
+                            s,
+                            *id,
+                            "Move chart in time",
+                            Some(format!("chart-shift-{}", id.0)),
+                            |c| done = c.shift_frames(step),
+                        );
+                        *moved += done;
+                    }
+                }
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+                    s.end_gesture();
+                    t.chart_drag = None;
+                }
+            } else if resp.hover_pos().and_then(chart_span_at).is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
             let scrub = t.scrubbing && (resp.dragged() || resp.drag_stopped());
             if let Some(p) = resp.interact_pointer_pos().filter(|p| {
@@ -1756,6 +1821,72 @@ pub fn xsheet(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile: 
 #[cfg(test)]
 mod hierarchy_tests {
     use super::*;
+
+    /// A chart's Timeline track is a handle: dragging inside its span
+    /// moves the whole chart in time, as one undo step, without scrubbing.
+    #[test]
+    fn dragging_a_chart_track_moves_the_chart_in_time() {
+        use symphony_core::chart::{Chart, Role};
+        use symphony_core::graph::NodeKind;
+        let mut session = Session::new_scene();
+        let mut chart = Chart::default();
+        chart.set_point(3, [0.0, 0.0], Role::Key);
+        chart.set_point(9, [50.0, 0.0], Role::Key);
+        let id = session
+            .doc
+            .graph
+            .add("Chart", NodeKind::Chart(Box::new(chart)));
+        session.frame = 1;
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(Vec2::new(800.0, 380.0))
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, (session, timing)| timeline(ui, session, timing, Profile::Symphony),
+                (session, TimingState::default()),
+            );
+        harness.run_steps(3);
+        // Find the chart's row: the cursor offers to grab its span.
+        let x = |frame: f32| 8.0 + 176.0 + (frame - 1.0) * theme::FRAME_CELL + 8.0;
+        let y = (0..95)
+            .map(|i| i as f32 * 4.0)
+            .find(|&y| {
+                harness
+                    .input_mut()
+                    .events
+                    .push(egui::Event::PointerMoved(Pos2::new(x(5.0), y)));
+                harness.run_steps(1);
+                harness.output().platform_output.cursor_icon == egui::CursorIcon::Grab
+            })
+            .expect("the chart's span is grabbable");
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (press, to) = (Pos2::new(x(5.0), y), Pos2::new(x(8.0), y));
+        harness.input_mut().events.push(button(press, true));
+        harness.run_steps(1);
+        for step in 1..=6 {
+            let p = press.lerp(to, step as f32 / 6.0);
+            harness
+                .input_mut()
+                .events
+                .push(egui::Event::PointerMoved(p));
+            harness.run_steps(1);
+        }
+        harness.input_mut().events.push(button(to, false));
+        harness.run_steps(2);
+        let frames = |s: &Session| match &s.doc.graph.node(id).unwrap().kind {
+            NodeKind::Chart(c) => c.points.iter().map(|p| p.frame).collect::<Vec<_>>(),
+            _ => unreachable!(),
+        };
+        let session = &mut harness.state_mut().0;
+        assert_eq!(frames(session), vec![6, 12]);
+        assert_eq!(session.frame, 1, "moving the chart doesn't scrub");
+        session.undo();
+        assert_eq!(frames(session), vec![3, 9]);
+    }
 
     #[test]
     fn timeline_scrub_can_cross_into_headers_and_reach_frame_one() {

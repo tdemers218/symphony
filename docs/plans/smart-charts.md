@@ -76,6 +76,8 @@ Timing { hold, ease_out, ease_in, spacing: Vec<[t, s]> }
    - Timing (ease out / ease in, spacing knots by sliding marks), Breakdown points, manual tangent handles, Corner / Line / Hold.
    - Scale and rotation handles on the selected point.
    - Timeline track, retiming with insert and delete frames, copy and paste points, shift the whole chart in time.
+     *Done:* drag a chart's span on its Timeline track to move it in time (`Chart::shift_frames`, never before frame 1, one undo step).
+     While a chart is edited (selected, Transform), Copy / Cut / Paste / Delete act on its point on the current frame. Copy between points takes where the chart is.
 4. **Node integration.**
    - A typed Motion output. Consumers: Peg first (follow a chart: position, plus optional rotation and scale), then others.
      *Peg done:* a peg's port 1 (`graph::MOTION_PORT`, a diamond socket, shown once the scene has a chart) takes a chart.

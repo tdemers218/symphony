@@ -1517,12 +1517,29 @@ impl SymphonyApp {
                         s.select_all();
                     }
                     Action::DeselectAll => s.deselect(),
-                    Action::Delete => s.delete_selection(),
-                    Action::Cut => s.cut_selection(),
-                    Action::Copy => s.copy_selection(),
+                    // While a Smart Chart is edited, these act on its point.
+                    Action::Delete => {
+                        if !s.delete_chart_point() {
+                            s.delete_selection()
+                        }
+                    }
+                    Action::Cut => {
+                        if s.copy_chart_point() {
+                            s.delete_chart_point();
+                        } else {
+                            s.cut_selection()
+                        }
+                    }
+                    Action::Copy => {
+                        if !s.copy_chart_point() {
+                            s.copy_selection()
+                        }
+                    }
                     Action::Paste => {
-                        s.tool = Tool::Select;
-                        s.paste();
+                        if !s.paste_chart_point() {
+                            s.tool = Tool::Select;
+                            s.paste();
+                        }
                     }
                     Action::FlipHorizontal | Action::FlipVertical => {
                         let h = other == Action::FlipHorizontal;
