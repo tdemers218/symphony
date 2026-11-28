@@ -1503,6 +1503,21 @@ impl SymphonyApp {
             Action::ToggleCameraEffects => self.camera.render_effects = !self.camera.render_effects,
             Action::ToggleAutoKey => self.s.animate = !self.s.animate,
             Action::ToggleLayerVisible => self.s.toggle_visible(self.s.selected),
+            Action::ChartRole => self.s.chart_toggle_role(),
+            Action::ChartHold => self.s.chart_toggle_hold(),
+            Action::ChartEarlier => self.s.chart_shift(-1),
+            Action::ChartLater => self.s.chart_shift(1),
+            Action::ChartEvenSpacing => self.s.chart_even_spacing(),
+            Action::ChartUnfollow => {
+                self.s.set_layer_chart(self.s.selected, None);
+            }
+            Action::ChartsVisible => self.s.toggle_charts_visible(),
+            Action::ChartPose => {
+                // Both views show the same needle state.
+                let on = !self.camera.chart_edit.show_pose;
+                self.camera.chart_edit.show_pose = on;
+                self.drawing.chart_edit.show_pose = on;
+            }
             Action::Timeline(action) => {
                 if action.enabled(&self.s) {
                     action.run(&mut self.s);
@@ -1679,6 +1694,30 @@ impl SymphonyApp {
             });
             if let Some(zoom_in) = zoom {
                 views::node::zoom_by_keyboard(&mut self.node_view, zoom_in);
+                ctx.request_repaint();
+            }
+        }
+        // Arrows nudge the edited Smart Chart's point on this frame (Shift:
+        // 10), as they nudge a posed bone.
+        if self.s.edited_chart().is_some() && (!symphony || canvas) && !control_focused {
+            use egui::{Key, Modifiers};
+            let d = ctx.input_mut(|i| {
+                let step = if i.modifiers.shift { 10.0 } else { 1.0 };
+                let mut d = [0.0f32; 2];
+                for (key, v) in [
+                    (Key::ArrowLeft, [-step, 0.0]),
+                    (Key::ArrowRight, [step, 0.0]),
+                    (Key::ArrowUp, [0.0, -step]),
+                    (Key::ArrowDown, [0.0, step]),
+                ] {
+                    if i.consume_key(Modifiers::NONE, key) || i.consume_key(Modifiers::SHIFT, key) {
+                        d[0] += v[0];
+                        d[1] += v[1];
+                    }
+                }
+                d
+            });
+            if d != [0.0, 0.0] && self.s.chart_nudge(d) {
                 ctx.request_repaint();
             }
         }
@@ -2954,6 +2993,20 @@ impl SymphonyApp {
                      trajectory",
                 ),
             );
+            // Every chart in the scene, by name: straight back to editing it.
+            for (id, node) in self.s.doc.graph.nodes() {
+                if matches!(node.kind, symphony_core::graph::NodeKind::Chart(_)) {
+                    out.push(
+                        Entry::new(
+                            &format!("Edit {}", node.name),
+                            Kind::Go,
+                            Command::EditChart(id),
+                            &format!("chart.edit.{}", id.0),
+                        )
+                        .words("smart chart select open motion path"),
+                    );
+                }
+            }
         }
         // Every blend mode is its own search result ("subtract", "glow",
         // "shadow"...), adding a Blend Modes node already set to it.
@@ -3011,7 +3064,7 @@ impl SymphonyApp {
                 "timing" | "frame" | "playback" | "layer" => {
                     (Kind::Action, vec![View::Timeline, View::Xsheet])
                 }
-                "view" | "drawing" | "onion" => (Kind::Action, canvas.to_vec()),
+                "view" | "drawing" | "onion" | "chart" => (Kind::Action, canvas.to_vec()),
                 _ => (Kind::Action, Vec::new()),
             };
             out.push(
@@ -3553,6 +3606,10 @@ impl SymphonyApp {
                 views::node::add_from_search(&mut self.s, &mut self.node_view, kind)
             }
             Command::FollowChart => self.s.follow_chart(),
+            Command::EditChart(id) => {
+                self.s.select_graph_node(id, true);
+                self.s.fit_tool_to_context();
+            }
         }
     }
 

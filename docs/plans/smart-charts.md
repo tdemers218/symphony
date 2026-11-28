@@ -97,9 +97,14 @@ Timing { hold, ease_out, ease_in, spacing: Vec<[t, s]> }
      - about 111 µs for the first frame after an edit (budget 2 ms).
    - User steps in `docs/TESTERS.md` ("Animate with Smart Charts").
 
+   *Shortcuts and search, done:* Symphony-profile keys while a chart is edited (Shift+B, Shift+H, [ ], arrows, Esc), logged in DESIGN §11.1.
+   Search has every chart action, plus "Edit <chart>" for each chart.
+
    *Open:* the manual workflow test, which needs Tristan.
 
 In-betweening, lighting, texture tracking and motion-processing nodes ([15]–[17]) come after; the Motion output is designed so they can consume or transform it.
+
+**Direction (Tristan, 2026-11-28):** all of Symphony's tracking will be chart-based, at least in the initial planning. Later tracking features (texture, lighting, in-betweening help) extend Smart Charts rather than adding a separate tracking system, so a chart is the one source of motion that they read.
 
 ## Look (v2, Tristan's direction, 2026-11-28)
 
@@ -110,7 +115,7 @@ A paper timing chart in a glass-lite finish:
 - **Controls:** a glass pill bar next to the point, placed where it hides least of the chart (above, below, or beside the point), with More for the rest. The same settings are in Node Properties. Esc finishes editing.
 - **Colours:** soft tones from the interface's own family (the Function view's curves), away from its meanings (selection blue, time amber, danger red).
   New charts take them in a fixed order: lilac, mint, aqua, rose, lime, periwinkle, orchid, sage. Each takes the first colour no chart uses yet, so a habit like charting the head first gives the same colours in every scene. Pick any other colour from the swatches in More or in Node Properties.
-- **Shadow, not glow:** the line and ticks sit on a soft drop shadow, like the glass chips. Tried in place of a coloured glow at Tristan's request; the side-by-side is with him to confirm.
+- **Shadow, not glow:** the line and ticks sit on a soft drop shadow, like the glass chips. Tristan chose it over the coloured glow (2026-11-28).
 
 ## Performance ([18])
 

@@ -128,11 +128,20 @@ pub enum Action {
     ToggleCameraEffects,
     ToggleAutoKey,
     ToggleLayerVisible,
+    /// Smart Charts, while one is edited (selected, Transform tool).
+    ChartRole,
+    ChartHold,
+    ChartEarlier,
+    ChartLater,
+    ChartPose,
+    ChartEvenSpacing,
+    ChartUnfollow,
+    ChartsVisible,
     Timeline(TimelineAction),
 }
 
 impl Action {
-    pub const ALL: [Action; 98] = [
+    pub const ALL: [Action; 106] = [
         Action::NewScene,
         Action::Open,
         Action::Save,
@@ -222,6 +231,14 @@ impl Action {
         Action::ToggleCameraEffects,
         Action::ToggleAutoKey,
         Action::ToggleLayerVisible,
+        Action::ChartRole,
+        Action::ChartHold,
+        Action::ChartEarlier,
+        Action::ChartLater,
+        Action::ChartPose,
+        Action::ChartEvenSpacing,
+        Action::ChartUnfollow,
+        Action::ChartsVisible,
         Action::Timeline(TimelineAction::SetKey),
         Action::Timeline(TimelineAction::DeleteKey),
         Action::Timeline(TimelineAction::InsertNew),
@@ -325,6 +342,14 @@ impl Action {
             Action::ToggleCameraEffects => "camera.effects",
             Action::ToggleAutoKey => "timing.animate",
             Action::ToggleLayerVisible => "layer.visible",
+            Action::ChartRole => "chart.role",
+            Action::ChartHold => "chart.hold",
+            Action::ChartEarlier => "chart.earlier",
+            Action::ChartLater => "chart.later",
+            Action::ChartPose => "chart.rotate_scale",
+            Action::ChartEvenSpacing => "chart.even_spacing",
+            Action::ChartUnfollow => "chart.unfollow",
+            Action::ChartsVisible => "chart.visibility",
             Action::Timeline(action) => action.id(),
         }
     }
@@ -420,6 +445,14 @@ impl Action {
             Action::ToggleCameraEffects => "Toggle camera effects",
             Action::ToggleAutoKey => "Toggle auto-key",
             Action::ToggleLayerVisible => "Hide or show the selected layer",
+            Action::ChartRole => "Smart Chart: key or breakdown",
+            Action::ChartHold => "Smart Chart: hold until the next point",
+            Action::ChartEarlier => "Move Smart Chart one frame earlier",
+            Action::ChartLater => "Move Smart Chart one frame later",
+            Action::ChartPose => "Smart Chart: rotate and scale",
+            Action::ChartEvenSpacing => "Smart Chart: even spacing",
+            Action::ChartUnfollow => "Stop following Smart Chart",
+            Action::ChartsVisible => "Show or hide Smart Charts",
             Action::Timeline(action) => action.label(),
         }
     }
@@ -565,7 +598,16 @@ fn harmony(action: Action) -> Option<Binding> {
         | Action::ResetNodeView
         | Action::ToggleCameraEffects
         | Action::ToggleAutoKey
-        | Action::ToggleLayerVisible => None,
+        | Action::ToggleLayerVisible
+        // Harmony has no Smart Charts: these are search-only there.
+        | Action::ChartRole
+        | Action::ChartHold
+        | Action::ChartEarlier
+        | Action::ChartLater
+        | Action::ChartPose
+        | Action::ChartEvenSpacing
+        | Action::ChartUnfollow
+        | Action::ChartsVisible => None,
     }
 }
 
@@ -612,6 +654,11 @@ fn symphony(action: Action) -> Option<Binding> {
         Action::Timeline(TimelineAction::InsertInbetween) => b(Key::I, NONE),
         Action::SwitchLineColourArt => b(Key::L, SHIFT),
         Action::PreviewArtLayers => b(Key::V, NONE),
+        // Smart Charts (DESIGN §11.1): only while a chart is edited.
+        Action::ChartRole => b(Key::B, SHIFT),
+        Action::ChartHold => b(Key::H, SHIFT),
+        Action::ChartEarlier => b(Key::OpenBracket, NONE),
+        Action::ChartLater => b(Key::CloseBracket, NONE),
         _ => harmony(action),
     }
 }
@@ -636,6 +683,7 @@ pub fn scope(profile: Profile, action: Action) -> Scope {
             Scope::Canvas
         }
         ArrangeNodes | ShowNodeProperties | RenderNodePreview | ResetNodeView => Scope::Node,
+        ChartRole | ChartHold | ChartEarlier | ChartLater => Scope::Canvas,
         ToggleCameraEffects => Scope::Camera,
         Timeline(TimelineAction::SetKey) if profile == Profile::Harmony => Scope::Timeline,
         Timeline(_) | ToggleAutoKey | ToggleLayerVisible => Scope::Timing,

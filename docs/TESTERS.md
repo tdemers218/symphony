@@ -176,6 +176,13 @@ A Smart Chart is an animator's timing chart that moves artwork. Search
   **Cut** and **Delete** act on the point on the current frame; Copy
   between points takes where the chart is.
 
+**Keys** (Symphony profile, while a chart is edited): Shift+B Key or
+breakdown, Shift+H Hold, [ and ] move the chart a frame earlier or later,
+arrows nudge the point (Shift: 10), Esc finishes. Search has these and
+more: **Edit <chart name>**, **Show or hide Smart Charts**, **Stop
+following Smart Chart**, **Smart Chart: even spacing**, **Smart Chart:
+rotate and scale**.
+
 Each new chart takes the next colour in a fixed order (lilac, mint,
 aqua, rose, ...), so charting the head first gives a lilac head in every
 scene. Pick another colour under **More** or in Node Properties.

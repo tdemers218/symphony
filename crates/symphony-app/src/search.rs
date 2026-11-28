@@ -51,6 +51,7 @@ pub enum Command {
     AddDrawingNode,
     AddNode(symphony_core::graph::NodeKind),
     FollowChart,
+    EditChart(symphony_core::graph::NodeId),
 }
 
 /// Settings that search can flip directly.

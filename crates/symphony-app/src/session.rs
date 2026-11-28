@@ -2005,6 +2005,118 @@ impl Session {
         }
     }
 
+    /// Change the edited chart as one undo step, or say why not.
+    fn edit_chart_point(
+        &mut self,
+        name: &str,
+        merge: Option<String>,
+        f: impl FnOnce(&mut symphony_core::chart::Chart, symphony_core::chart::PointId),
+    ) -> bool {
+        let Some((id, chart)) = self.edited_chart_data() else {
+            return false;
+        };
+        if chart.locked {
+            self.note("This chart is locked.");
+            return true;
+        }
+        let Some(pid) = chart.point_on(self.frame).map(|p| p.id) else {
+            self.note(format!("The chart has no point on frame {}.", self.frame));
+            return true;
+        };
+        crate::views::chart_edit::edit(self, id, name, merge, |c| f(c, pid));
+        true
+    }
+
+    /// Shift+B: the point on this frame becomes a breakdown, or a key again.
+    pub fn chart_toggle_role(&mut self) {
+        use symphony_core::chart::Role;
+        self.edit_chart_point("Key or breakdown", None, |c, pid| {
+            if let Some(p) = c.point_mut(pid) {
+                p.role = match p.role {
+                    Role::Key => Role::Breakdown,
+                    Role::Breakdown => Role::Key,
+                };
+            }
+        });
+    }
+
+    /// Shift+H: hold the point on this frame until the next one.
+    pub fn chart_toggle_hold(&mut self) {
+        self.edit_chart_point("Hold", None, |c, pid| {
+            let last = c.points.last().map(|p| p.id) == Some(pid);
+            if let Some(p) = c.point_mut(pid).filter(|_| !last) {
+                p.timing.hold = !p.timing.hold;
+            }
+        });
+    }
+
+    pub fn chart_even_spacing(&mut self) {
+        self.edit_chart_point("Even spacing", None, |c, pid| c.even_spacing(pid));
+    }
+
+    /// Arrows: move the point on this frame (stage units).
+    pub fn chart_nudge(&mut self, d: [f32; 2]) -> bool {
+        let Some(id) = self.edited_chart() else {
+            return false;
+        };
+        // Repeated nudges of one point merge into one undo step.
+        let key = format!("chart-nudge-{}-{}", id.0, self.frame);
+        self.edit_chart_point("Nudge chart point", Some(key), |c, pid| {
+            if let Some(p) = c.point_mut(pid) {
+                p.pos = [p.pos[0] + d[0], p.pos[1] + d[1]];
+            }
+        });
+        true
+    }
+
+    /// [ and ]: the whole edited chart a frame earlier or later.
+    pub fn chart_shift(&mut self, delta: i64) {
+        let Some((id, chart)) = self.edited_chart_data() else {
+            return;
+        };
+        if chart.locked {
+            self.note("This chart is locked.");
+            return;
+        }
+        crate::views::chart_edit::edit(self, id, "Move chart in time", None, |c| {
+            c.shift_frames(delta);
+        });
+    }
+
+    /// Hide every Smart Chart's overlay, or show them all again.
+    pub fn toggle_charts_visible(&mut self) {
+        let charts: Vec<NodeId> = self
+            .doc
+            .graph
+            .nodes()
+            .filter(|(_, n)| matches!(n.kind, NodeKind::Chart(_)))
+            .map(|(id, _)| id)
+            .collect();
+        let any_shown = charts.iter().any(|&id| {
+            matches!(&self.doc.graph.node(id).map(|n| &n.kind),
+                Some(NodeKind::Chart(c)) if c.visible)
+        });
+        let edits: Vec<Edit> = charts
+            .into_iter()
+            .filter_map(|id| {
+                let before = self.doc.graph.node(id)?.clone();
+                let mut after = before.clone();
+                if let NodeKind::Chart(c) = &mut after.kind {
+                    c.visible = !any_shown;
+                }
+                (after != before).then_some(Edit::SetNodeProperties { id, before, after })
+            })
+            .collect();
+        if !edits.is_empty() {
+            let name = if any_shown {
+                "Hide Smart Charts"
+            } else {
+                "Show Smart Charts"
+            };
+            self.history.apply(&mut self.doc, name, edits);
+        }
+    }
+
     /// Copy while editing a chart: its point on this frame, or where the
     /// chart is on this frame as a new key. False when no chart is edited.
     pub fn copy_chart_point(&mut self) -> bool {
@@ -4629,6 +4741,54 @@ mod tests {
         // Not editing a chart: the usual Copy.
         s.tool = Tool::Brush;
         assert!(!s.copy_chart_point());
+    }
+
+    /// The chart keys: Shift+B makes a breakdown and back, Shift+H holds,
+    /// [ and ] move the chart in time, arrows nudge (one undo step for a
+    /// run of nudges), and charts hide and show together.
+    #[test]
+    fn chart_shortcuts_act_on_the_edited_chart() {
+        use symphony_core::chart::Role;
+        let mut s = Session::new_scene();
+        let mut nodes = crate::views::node::NodeViewState::default();
+        crate::views::node::add_from_search(&mut s, &mut nodes, crate::views::node::smart_chart());
+        let id = s.selected_node.unwrap();
+        for (f, x) in [(1, 0.0), (5, 40.0), (9, 80.0)] {
+            s.frame = f;
+            crate::views::chart_edit::place(&mut s, id, [x, 0.0]);
+        }
+        let chart = |s: &Session| match &s.doc.graph.node(id).unwrap().kind {
+            NodeKind::Chart(c) => (**c).clone(),
+            _ => unreachable!(),
+        };
+        s.frame = 5;
+        // Placed past the end at the time, frame 5 started as a key.
+        s.chart_toggle_role();
+        assert_eq!(chart(&s).point_on(5).unwrap().role, Role::Breakdown);
+        s.chart_toggle_role();
+        assert_eq!(chart(&s).point_on(5).unwrap().role, Role::Key);
+        s.chart_toggle_hold();
+        assert!(chart(&s).point_on(5).unwrap().timing.hold);
+        let before = s.history.undo_len();
+        for _ in 0..3 {
+            s.chart_nudge([0.0, 10.0]);
+        }
+        assert_eq!(chart(&s).point_on(5).unwrap().pos, [40.0, 30.0]);
+        assert_eq!(
+            s.history.undo_len(),
+            before + 1,
+            "a run of nudges is one step"
+        );
+        s.end_gesture();
+        s.chart_shift(2);
+        assert_eq!(
+            chart(&s).points.iter().map(|p| p.frame).collect::<Vec<_>>(),
+            vec![3, 7, 11]
+        );
+        s.toggle_charts_visible();
+        assert!(!chart(&s).visible);
+        s.toggle_charts_visible();
+        assert!(chart(&s).visible);
     }
 
     fn line(s: &mut Session, x0: f32, x1: f32) -> Stroke {
