@@ -17,6 +17,11 @@ pub struct Swatch {
     /// painting never repaints or unpaints what uses this swatch.
     #[serde(default)]
     pub protected: bool,
+    /// Behaviours that vary the colour as it's painted (dynamic swatches).
+    /// `None` is a plain colour, and is what every swatch saved before
+    /// dynamics loads as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamics: Option<Box<crate::dynamics::Dynamics>>,
 }
 
 fn opaque() -> u8 {
@@ -56,5 +61,8 @@ mod tests {
         let sw: Swatch = serde_json::from_str(old).unwrap();
         assert!(!sw.protected);
         assert_eq!(sw.opacity, 255);
+        assert!(sw.dynamics.is_none());
+        // A plain swatch saves exactly as before.
+        assert!(!serde_json::to_string(&sw).unwrap().contains("dynamics"));
     }
 }

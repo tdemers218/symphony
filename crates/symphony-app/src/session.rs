@@ -3222,6 +3222,7 @@ impl Session {
                                 rgb: [r, gg, b],
                                 opacity: a,
                                 protected: false,
+                                dynamics: None,
                             });
                             palette_changed = true;
                             id
@@ -3518,6 +3519,7 @@ impl Session {
             rgb: [r, g, b],
             opacity,
             protected: false,
+            dynamics: None,
         });
         self.apply_palette("Add colour", palette, Vec::new());
         self.swatch = id;
@@ -3544,6 +3546,7 @@ impl Session {
             rgb,
             opacity: 255,
             protected: false,
+            dynamics: None,
         });
         self.apply_palette("Pick screen colour", palette, Vec::new());
         self.swatch = id;

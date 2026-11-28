@@ -11,6 +11,7 @@ pub mod b64;
 pub mod chart;
 pub mod colour;
 pub mod doc;
+pub mod dynamics;
 pub mod graph;
 pub mod history;
 pub mod id;

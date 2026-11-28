@@ -327,6 +327,7 @@ impl Scene {
             rgb,
             opacity: 255,
             protected: false,
+            dynamics: None,
         };
         let palette = Palette {
             name: "Scene palette".into(),

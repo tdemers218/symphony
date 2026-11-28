@@ -137,7 +137,7 @@ fn colour_at(base: Oklch, d: &Dynamics, input: &Sample, seed: u64) -> Rgba
 
 Each step is one or more commits with tests and a manual update (E11.6).
 
-### Step 0: swatches (done first, Tristan's ask)
+### Step 0: swatches (done first, Tristan's ask) ✅ 605ab92
 - Square chips with concentric corners: chip radius `RADIUS_CONTROL`, the
   row or tile highlight `around(chip, inset)`, the selection ring
   `around(chip, gap)`.
@@ -145,7 +145,7 @@ Each step is one or more commits with tests and a manual update (E11.6).
 - Colour view **List / Swatches** switch, matching Harmony's List and
   Swatch modes. Swatches is a grid of squares with the name on hover.
 
-### Phase 1: foundation
+### Phase 1: foundation ✅ c4966f8, 241b6d2
 1. `colour.rs`: sRGB ⇄ linear ⇄ OKLab/OKLCH, gamut mapping, tests
    (round-trips, known reference values, gamut edge).
 2. Move `mix` / `BlendMode` blending maths into core, with the renderer
@@ -154,12 +154,15 @@ Each step is one or more commits with tests and a manual update (E11.6).
    through the renderer.
 4. The OKLCH picker layout in the popup, and current / previous colour.
 5. Composite preview: in the picker, the colour as it will look over a
-   chosen backdrop (sampled from the canvas or picked) at the current
-   blend mode and opacity, using the core `mix`.
+   chosen backdrop at a blend mode and opacity, using the core `mix`.
+   White, grey and near black for now; sampling the canvas comes with
+   the smart eyedropper.
 
 ### Phase 2: dynamic colours
-1. `Dynamics` model, serde, the evaluator, the seeding rule, and tests
-   (determinism, undo or reload give identical colours).
+1. ✅ `Dynamics` model, serde, the evaluator, the seeding rule, and tests
+   (determinism, undo or reload give identical colours). In
+   `symphony-core/src/dynamics.rs`; Variation and Pressure so far, other
+   kinds join as their inputs arrive.
 2. Shared input `Sample`: point timestamps for speed, and stroke distance.
 3. Per-dab colour in the stamped brush, Natural variation and Pressure.
 4. Per-stroke and per-region colour for vector lines and fills.
