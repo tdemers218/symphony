@@ -222,7 +222,7 @@ fn preferences_window(ctx: &egui::Context, id: egui::Id) -> egui::Window<'static
                 // The glass (live blur and tint) is painted underneath.
                 .fill(egui::Color32::TRANSPARENT)
                 .stroke(egui::Stroke::NONE)
-                .corner_radius(theme::GLASS_RADIUS),
+                .corner_radius(theme::WINDOW_RADIUS),
         )
 }
 
@@ -4662,7 +4662,7 @@ impl SymphonyApp {
                     &self.recent_projects,
                     self.recovery_scan.is_some(),
                     self.opening.is_some(),
-                    &|rect| self.wallpaper.glass(rect),
+                    &|rect| self.wallpaper.glass_rounded(rect, theme::HERO_RADIUS),
                 ) {
                     Some(welcome::Action::Open) => self.open_dialog(false, &ctx),
                     Some(welcome::Action::Recent(path)) => self.open_path(path, false, &ctx),
@@ -4794,9 +4794,9 @@ impl SymphonyApp {
                 let rect = window.response.rect;
                 glass.set(
                     background,
-                    egui::Shape::Vec(backdrop::glass(&ctx, rect, f32::from(theme::GLASS_RADIUS))),
+                    egui::Shape::Vec(backdrop::glass(&ctx, rect, f32::from(theme::WINDOW_RADIUS))),
                 );
-                theme::glass_rim(&glass, rect);
+                theme::glass_rim_rounded(&glass, rect, theme::WINDOW_RADIUS);
             }
         }
 
@@ -4919,9 +4919,9 @@ impl SymphonyApp {
             let rect = window.response.rect;
             glass.set(
                 background,
-                egui::Shape::Vec(backdrop::glass(&ctx, rect, f32::from(theme::GLASS_RADIUS))),
+                egui::Shape::Vec(backdrop::glass(&ctx, rect, f32::from(theme::WINDOW_RADIUS))),
             );
-            theme::glass_rim(&glass, rect);
+            theme::glass_rim_rounded(&glass, rect, theme::WINDOW_RADIUS);
         }
         self.show_preferences = open;
         let mut open = self.show_icon_sheet;

@@ -295,13 +295,18 @@ impl Wallpaper {
 
     /// Sample the same wallpaper in window coordinates, clipped to rounded glass.
     pub fn glass(&self, rect: Rect) -> Option<egui::Shape> {
+        self.glass_rounded(rect, theme::GLASS_RADIUS)
+    }
+
+    /// `glass` clipped to another radius (the welcome card).
+    pub fn glass_rounded(&self, rect: Rect, radius: u8) -> Option<egui::Shape> {
         // Interface effects off (slower computers): plain tint, no blur.
         if !theme::effects() {
             return None;
         }
         self.sample(
             rect,
-            f32::from(theme::GLASS_RADIUS),
+            f32::from(radius),
             self.blur.max(GLASS_BLUR),
             Color32::from_gray(204),
         )

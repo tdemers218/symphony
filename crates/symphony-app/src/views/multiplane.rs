@@ -68,11 +68,7 @@ pub fn ui(ui: &mut egui::Ui, s: &mut Session, node_view: &mut NodeViewState) {
 
     let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
     let viewport = response.rect;
-    painter.rect_filled(
-        viewport,
-        theme::GLASS_RADIUS.saturating_sub(4),
-        theme::BG_INPUT,
-    );
+    painter.rect_filled(viewport, theme::BODY_RADIUS, theme::BG_INPUT);
     let navigation_drag = response.dragged_by(egui::PointerButton::Middle)
         || response.dragged_by(egui::PointerButton::Secondary);
     let wheel = response.hovered() && ui.input(|i| i.smooth_scroll_delta.y != 0.0);
@@ -187,11 +183,7 @@ pub fn ui(ui: &mut egui::Ui, s: &mut Session, node_view: &mut NodeViewState) {
     }
     if response.drag_started_by(egui::PointerButton::Primary) && hit.is_none() {
         ui.data_mut(|data| data.insert_temp(mode_id, true));
-        painter.rect_filled(
-            viewport,
-            theme::GLASS_RADIUS.saturating_sub(4),
-            theme::BG_INPUT,
-        );
+        painter.rect_filled(viewport, theme::BODY_RADIUS, theme::BG_INPUT);
         orbit_stage(ui, &response, &painter, s, orbit_id);
         return;
     }

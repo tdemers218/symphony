@@ -223,12 +223,20 @@ pub fn ui(ui: &mut egui::Ui, s: &mut Session, state: &mut SetupState) -> bool {
             let mid = screen([(a[0] + z[0]) / 2.0, (a[1] + z[1]) / 2.0]);
             let side = 56.0;
             let r = Rect::from_center_size(mid + Vec2::new(0.0, -side * 0.75), Vec2::splat(side));
-            painter.rect_filled(r, 6.0, theme::GLASS_PANEL);
-            painter.image(
-                tex.id(),
-                r.shrink(3.0),
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                Color32::WHITE,
+            // Concentric: the picture sits 3 px in, so its corners are 3
+            // smaller than the frame's.
+            let (outer, inset) = (6u8, 3u8);
+            painter.rect_filled(r, outer, theme::GLASS_PANEL);
+            painter.add(
+                egui::epaint::RectShape::filled(
+                    r.shrink(f32::from(inset)),
+                    theme::inside(outer, inset),
+                    Color32::WHITE,
+                )
+                .with_texture(
+                    tex.id(),
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                ),
             );
         }
     }

@@ -84,10 +84,43 @@ pub const GLASS_CONTROL_RADIUS: u8 = GLASS_RADIUS - GLASS_TOOL_INSET as u8;
 #[cfg(feature = "dock")]
 const GLASS_TAB_INSET: i8 = 5;
 
-// §6.3 radii.
+// §6.3 radii. Corners are concentric (D6.3): a shape set `inset` inside
+// another has radius `outer - inset`, and a container around a child has
+// `inner + inset`, so nested curves share their centres. Derive radii
+// from these two functions instead of picking numbers.
+
+/// The radius of a shape set `inset` inside a corner of radius `outer`.
+pub const fn inside(outer: u8, inset: u8) -> u8 {
+    outer.saturating_sub(inset)
+}
+
+/// The radius of a container whose children (radius `inner`) sit `inset`
+/// in from its edge.
+pub const fn around(inner: u8, inset: u8) -> u8 {
+    inner + inset
+}
+
 pub const RADIUS_CONTROL: u8 = 4;
+/// Space between a menu or popup's edge and its items.
+pub const MENU_PAD: i8 = 4;
+/// Menus and popups: around their items.
+pub const RADIUS_FLOATING: u8 = around(RADIUS_CONTROL, MENU_PAD as u8);
 pub const RADIUS_CARD: u8 = 8;
-pub const RADIUS_FLOATING: u8 = 8;
+/// Windows (Preferences, Tool Properties, dialogs): around their controls
+/// at the window padding.
+pub const WINDOW_RADIUS: u8 = around(RADIUS_CONTROL, CARD_PAD as u8);
+/// Project dialogs have roomier padding, so a larger radius.
+pub const MODAL_PAD: i8 = 18;
+pub const MODAL_RADIUS: u8 = around(RADIUS_CONTROL, MODAL_PAD as u8);
+/// The search palette: around its field and result rows.
+pub const SEARCH_PAD: i8 = 8;
+pub const SEARCH_RADIUS: u8 = around(RADIUS_CONTROL, SEARCH_PAD as u8);
+/// The welcome screen's card: around its controls at its wide padding.
+pub const HERO_PAD: i8 = 24;
+pub const HERO_RADIUS: u8 = around(RADIUS_CONTROL, HERO_PAD as u8);
+/// What fills a docked view's body (the canvas, graphs), inside the
+/// view's glass card.
+pub const BODY_RADIUS: u8 = inside(GLASS_RADIUS, 4);
 
 pub fn dense() -> FontId {
     FontId::proportional(SIZE_DENSE)
@@ -197,21 +230,29 @@ pub fn set_motion(ctx: &egui::Context, enabled: bool) {
 /// glass backdrop under the contents, with the glass corners, edge and a
 /// soft shadow.
 pub fn glass_window_frame(style: &egui::Style) -> egui::Frame {
+    // No padding: the view's tab bar sits GLASS_TAB_INSET in from the
+    // edge, as in a docked card, so its tabs stay concentric.
     egui::Frame::window(style)
         .fill(Color32::TRANSPARENT)
+        .inner_margin(Margin::ZERO)
         .corner_radius(GLASS_RADIUS)
         .stroke(Stroke::new(1.0, Color32::from_white_alpha(22)))
 }
 
 /// One inner rim on the same rounded rectangle as the glass fill.
 pub fn glass_rim(painter: &egui::Painter, rect: egui::Rect) {
+    glass_rim_rounded(painter, rect, GLASS_RADIUS);
+}
+
+/// `glass_rim` for glass of another radius (windows, dialogs).
+pub fn glass_rim_rounded(painter: &egui::Painter, rect: egui::Rect, radius: u8) {
     painter.rect_stroke(
         rect,
-        GLASS_RADIUS,
+        radius,
         Stroke::new(1.0, GLASS_EDGE),
         egui::StrokeKind::Inside,
     );
-    let inset = f32::from(GLASS_RADIUS);
+    let inset = f32::from(radius);
     if rect.width() > inset * 2.0 {
         let y = rect.top() + 0.5;
         painter.hline(
@@ -274,9 +315,9 @@ pub fn feather_panel(painter: &egui::Painter, rect: egui::Rect, colour: Color32,
 pub fn glass_modal(ctx: &egui::Context, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Modal {
     let frame = egui::Frame::popup(&ctx.global_style())
         .fill(Color32::from_rgba_premultiplied(26, 28, 31, 220))
-        .corner_radius(GLASS_RADIUS)
+        .corner_radius(MODAL_RADIUS)
         .stroke(Stroke::new(1.0, GLASS_EDGE))
-        .inner_margin(Margin::same(18));
+        .inner_margin(Margin::same(MODAL_PAD));
     egui::Modal::new(egui::Id::unique(id)).frame(frame)
 }
 
@@ -309,7 +350,7 @@ pub fn apply(ctx: &egui::Context) {
         s.button_padding = Vec2::new(8.0, 4.0);
         s.interact_size = Vec2::new(24.0, 20.0);
         s.window_margin = Margin::same(CARD_PAD);
-        s.menu_margin = Margin::same(4);
+        s.menu_margin = Margin::same(MENU_PAD);
 
         let v = &mut style.visuals;
         v.dark_mode = true;
@@ -318,7 +359,7 @@ pub fn apply(ctx: &egui::Context) {
         v.window_fill = BG_PANEL;
         shadows(v, effects());
         v.window_stroke = Stroke::new(1.0, GLASS_EDGE);
-        v.window_corner_radius = CornerRadius::same(GLASS_RADIUS);
+        v.window_corner_radius = CornerRadius::same(WINDOW_RADIUS);
         v.menu_corner_radius = CornerRadius::same(RADIUS_FLOATING);
         v.extreme_bg_color = BG_INPUT;
         v.faint_bg_color = BG_RAISED;

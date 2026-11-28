@@ -1504,7 +1504,7 @@ pub fn ui(
     // The view's corners are rounded like its panel; the stage stays sharp.
     painter.rect_filled(
         rect,
-        f32::from(theme::GLASS_RADIUS) - 4.0,
+        f32::from(theme::BODY_RADIUS),
         if show_surround {
             CanvasColours::get(colours.surround)
         } else {

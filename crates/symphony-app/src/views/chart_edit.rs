@@ -1064,7 +1064,7 @@ fn bar(
 const CONTROL: f32 = 22.0;
 const INSET: f32 = 4.0;
 const CONTROL_RADIUS: u8 = 11;
-const BAR_RADIUS: u8 = CONTROL_RADIUS + INSET as u8;
+const BAR_RADIUS: u8 = theme::around(CONTROL_RADIUS, INSET as u8);
 /// The switch's sliding highlight sits this far inside its track.
 const SWITCH_INSET: f32 = 2.0;
 
@@ -1122,7 +1122,7 @@ fn pill_switch<T: PartialEq + Copy>(
         .translate(origin);
         ui.painter().rect_filled(
             r,
-            CONTROL_RADIUS - SWITCH_INSET as u8,
+            theme::inside(CONTROL_RADIUS, SWITCH_INSET as u8),
             theme::ACCENT_SELECT_FILL,
         );
     }

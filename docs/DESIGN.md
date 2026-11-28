@@ -283,10 +283,23 @@ and animation state.
   - Timeline frame cell: 16 px wide at default zoom.
   - Minimum pen target: 24 px.
   - Card inner padding: 12 px. Gutter between cards: 6 px.
-- **D6.3 Corner radius.**
-  - Controls, rows and exposure blocks: 4 px. Tool-strip buttons: 6 px.
-  - Docked glass panels and the Tools toolbar: 12 px.
-  - Popups and menus: 8 px. Floating windows: 12 px.
+- **D6.3 Corner radius: concentric everywhere.** A shape set `inset` inside
+  another has radius `outer − inset`; a container around children has
+  `inner + inset`. Nested curves therefore share a centre. Derive every radius
+  with `theme::inside` / `theme::around` and the padding actually used, never
+  a free number. When padding changes, the radius follows.
+  - Controls, rows and exposure blocks: 4 px.
+  - Docked glass panels and the Tools toolbar: 12 px. Their tabs are 12 − 5 = 7,
+    tool buttons 12 − 6 = 6, and a view's body (canvas, graphs) is 12 − 4 = 8.
+  - Menus and popups: 4 + 4 = 8. The search palette: 4 + 8 = 12.
+  - Windows (Preferences, Tool Properties, dialogs): 4 + 12 = 16. Project
+    dialogs: 4 + 18 = 22. The welcome card: 4 + 24 = 28.
+  - Floating views keep their 12 px glass with no extra padding, so their tabs
+    match docked ones.
+  - Canvas overlays (Smart Chart bar): a 30 px capsule (radius 15) around
+    22 px capsules (radius 11) at a 4 px inset. A switch's highlight sits 2 px
+    inside its track (11 − 2 = 9).
+  - Rings and glows around a point share the point's centre.
   - The stage: 0, because paper has square corners.
 - **D6.4 Shadows** only on things that float above the dock (menus,
   popups, floating windows), and on the stage (D3.10). Cards are flat:

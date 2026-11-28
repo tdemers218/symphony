@@ -334,9 +334,9 @@ pub fn ui(
             let frame = egui::Frame::new()
                 .fill(egui::Color32::TRANSPARENT)
                 .stroke(egui::Stroke::new(1.0, theme::LINE_STRONG))
-                .corner_radius(theme::RADIUS_FLOATING)
+                .corner_radius(theme::SEARCH_RADIUS)
                 .shadow(ui.visuals().popup_shadow)
-                .inner_margin(egui::Margin::same(8))
+                .inner_margin(egui::Margin::same(theme::SEARCH_PAD))
                 .show(ui, |ui| {
                     ui.set_width(field_width);
                     let edit = ui.add(
@@ -553,7 +553,7 @@ pub fn ui(
                 egui::Shape::Vec(crate::backdrop::glass(
                     ui.ctx(),
                     frame.response.rect,
-                    f32::from(theme::RADIUS_FLOATING),
+                    f32::from(theme::SEARCH_RADIUS),
                 )),
             );
         });

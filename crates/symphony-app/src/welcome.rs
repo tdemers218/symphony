@@ -165,8 +165,8 @@ impl Welcome {
                 ui.multiply_opacity(panel_in);
                 egui::Frame::new()
                     .fill(theme::GLASS_PANEL)
-                    .corner_radius(theme::GLASS_RADIUS)
-                    .inner_margin(Margin::same(24))
+                    .corner_radius(theme::HERO_RADIUS)
+                    .inner_margin(Margin::same(theme::HERO_PAD))
                     .show(ui, |ui| {
                         ui.set_width(column.width() - 48.0);
                         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -255,7 +255,7 @@ impl Welcome {
                 under.push(sample);
             }
             painter.set(backdrop, egui::Shape::Vec(under));
-            theme::glass_rim(&painter, card);
+            theme::glass_rim_rounded(&painter, card, theme::HERO_RADIUS);
         }
         let used = card.bottom() - top;
         if (used - last_h).abs() > 0.5 {

@@ -3257,7 +3257,7 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
             (origin.x - viewport.left()).rem_euclid(grid),
             state.pan.y.rem_euclid(grid),
         );
-    let radius = f32::from(theme::GLASS_RADIUS.saturating_sub(4));
+    let radius = f32::from(theme::BODY_RADIUS);
     painter.rect_filled(viewport, radius, theme::BG_INPUT);
     let inset = viewport.shrink(radius);
     let rounded_contains = |point: Pos2| {
