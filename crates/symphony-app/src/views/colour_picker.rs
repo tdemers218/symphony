@@ -165,6 +165,18 @@ pub fn editor(
             }
             ui.separator();
             composite_preview(ui, next);
+            if ui
+                .button("Colour Lab…")
+                .on_hover_text(
+                    "Light this colour on a sphere or cube to find its shadows and highlights",
+                )
+                .clicked()
+            {
+                let [r, g, b, _] = next;
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(super::colour_lab::open_request(), [r, g, b]));
+                ui.close();
+            }
             if next != *rgba {
                 *rgba = next;
                 chip.mark_changed();

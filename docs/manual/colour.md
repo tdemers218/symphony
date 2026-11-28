@@ -42,7 +42,8 @@ Changes apply as you make them, to everything painted with the swatch.
   white, mid grey or near black, with a layer **Blend** mode, at the
   colour's opacity. It uses the same maths as the render.
 
-Symphony remembers the layout you used last.
+Symphony remembers the layout you used last. **Colour Lab…** at the
+bottom opens the [Colour Lab](#colour-lab) on this colour.
 
 ### Three kinds of opacity
 
@@ -58,6 +59,41 @@ They multiply: a brush at 50% with a colour at 50% paints at 25%.
 
 To recolour a character, edit the swatch rather than repainting: every
 line and fill linked to it updates together.
+
+## Colour Lab
+
+The Colour Lab finds shading colours for a base colour by lighting it. Open
+it with **Colour Lab…** in a colour editor, from **Windows**, or by
+searching (`Tab`) for "Colour Lab". It opens as a floating window; dock it
+like any view.
+
+It shows a **Sphere** or a **Cube** in your colour on a floor, lit by:
+
+- a **Main light** and an optional **Second light**, each with a colour
+  and a strength. Drag the dot on the round dial to set where a light
+  comes from, seen from above: you stand at the bottom of the dial, the
+  middle is straight overhead, and the top edge is behind the object (a
+  rim light). **Height** sets how high it is;
+- **Sky light**, light from all around that fills the shadows;
+- **Bounce**, light the floor throws back up onto the object, in the
+  floor's colour;
+- **Cast shadows** on the floor, and **Highlight** and **Gloss** for the
+  shine.
+
+**Smooth** shades gradually; **Cel** gives flat tones the way cel
+animation paints them (**Tones** sets how many).
+
+Click the picture to pick a colour. Then:
+
+- **Add to palette** adds it as a flat colour, or
+- paint it as a layer over the base colour: the list shows, for each
+  blend mode that can make the colour, the colour to paint with at the
+  **Opacity** you set. **Add** puts that colour in the palette. Modes
+  that can't make it are listed underneath: Multiply only darkens and
+  Screen only lightens, for example, and some need a higher opacity.
+
+The recipes use the same blending as the render, so a Multiply layer
+painted with the listed colour at that opacity gives the picked colour.
 
 ## Paint
 

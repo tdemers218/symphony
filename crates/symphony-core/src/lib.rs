@@ -15,6 +15,7 @@ pub mod dynamics;
 pub mod graph;
 pub mod history;
 pub mod id;
+pub mod lab;
 pub mod math;
 pub mod palette;
 pub mod puppet;

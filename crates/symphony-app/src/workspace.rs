@@ -25,10 +25,11 @@ pub enum View {
     Multiplane,
     UndoHistory,
     Manual,
+    ColourLab,
 }
 
 impl View {
-    pub const ALL: [View; 14] = [
+    pub const ALL: [View; 15] = [
         View::Camera,
         View::Drawing,
         View::Timeline,
@@ -43,6 +44,7 @@ impl View {
         View::Multiplane,
         View::UndoHistory,
         View::Manual,
+        View::ColourLab,
     ];
 
     pub fn title(self) -> &'static str {
@@ -61,6 +63,7 @@ impl View {
             View::Library => "Library",
             View::UndoHistory => "Undo History",
             View::Manual => "Manual",
+            View::ColourLab => "Colour Lab",
         }
     }
 }

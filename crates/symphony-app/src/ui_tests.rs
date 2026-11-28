@@ -2931,3 +2931,39 @@ fn a_colour_row_or_tile_picks_its_swatch_for_drawing() {
         assert_eq!(h.state().swatch, shirt, "tiles: {tiles}");
     }
 }
+
+#[test]
+fn the_colour_lab_renders_and_explains_a_picked_shadow() {
+    use crate::views::colour_lab::{self, LabState};
+    struct Lab {
+        s: Session,
+        lab: LabState,
+    }
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(900.0, 600.0))
+        .build_ui_state(
+            |ui, l: &mut Lab| colour_lab::ui(ui, &mut l.s, &mut l.lab),
+            Lab {
+                s: Session::new_scene(),
+                lab: LabState::default(),
+            },
+        );
+    // The render runs on a thread; the old picture shows meanwhile.
+    for _ in 0..400 {
+        h.run_steps(1);
+        if h.state().lab.ready() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state().lab.ready(), "the Lab never finished rendering");
+    // The shadow side of the sphere, low right: darker than the base, so
+    // Multiply can paint it.
+    h.state_mut().lab.pick([250, 250]);
+    h.run_steps(2);
+    h.get_by_label("Multiply");
+    h.get_by_label("Add to palette").click();
+    h.run_steps(2);
+    let count = h.state().s.doc.palette.swatches.len();
+    assert_eq!(count, Session::new_scene().doc.palette.swatches.len() + 1);
+}

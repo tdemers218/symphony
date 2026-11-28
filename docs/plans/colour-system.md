@@ -171,6 +171,25 @@ Each step is one or more commits with tests and a manual update (E11.6).
 6. Level 2 and Level 3 interface, the dynamic swatch chip look, and
    Search entries.
 
+### Colour Lab, first version ✅ (Tristan's ask, 2026-11-28, brought forward)
+Tristan's additions to [4]: the light's colour and angle, bounce light,
+shadows and highlights, and two lights at once. For each colour picked off
+the model, either take it as a flat colour, or get **the blend mode,
+opacity and colour that paint it over the base**.
+- `symphony-core/src/lab.rs`: a small deterministic ray tracer (sphere or
+  turned cube on a floor; key and second light as distant lights with
+  colour, strength, direction; sky light; floor bounce; cast shadows;
+  contact darkening; Blinn–Phong highlight; smooth or cel bands), lit in
+  linear light. `recipe()` inverts `colour::composite` per channel by
+  bisection (the modes offered all rise steadily with the paint colour),
+  and `lowest_opacity()` finds the least opacity that still reaches it.
+- `views/colour_lab.rs`: `View::ColourLab`, floating by default. Renders
+  on a thread and keeps the last picture until the new one is ready.
+  Light direction is a top-down dial. "Colour Lab…" in every colour
+  editor opens it on that colour.
+- Still to do from [4]: cylinder, cloth, the current artwork as a
+  surface, separate blend modes per light, a ramp saved to the palette.
+
 ### Phase 3: contextual intelligence
 1. Suggestions: shadow, highlight, warmer, cooler, complementary, in
    OKLCH, aware of blend mode and opacity (a Multiply shadow suggests

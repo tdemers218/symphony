@@ -3525,6 +3525,23 @@ impl Session {
         self.swatch = id;
     }
 
+    /// Add an opaque colour to the palette and make it current.
+    pub fn add_colour(&mut self, undo_name: &str, name: String, rgb: [u8; 3]) -> Id {
+        let id = self.doc.ids.fresh();
+        let mut palette = self.doc.palette.clone();
+        palette.swatches.push(symphony_core::palette::Swatch {
+            id,
+            name,
+            rgb,
+            opacity: 255,
+            protected: false,
+            dynamics: None,
+        });
+        self.apply_palette(undo_name, palette, Vec::new());
+        self.swatch = id;
+        id
+    }
+
     #[cfg(target_os = "macos")]
     pub fn use_screen_colour(&mut self, rgb: [u8; 3]) {
         if let Some(swatch) = self
@@ -3537,19 +3554,8 @@ impl Session {
             self.swatch = swatch.id;
             return;
         }
-        let id = self.doc.ids.fresh();
-        let mut palette = self.doc.palette.clone();
         let [r, g, b] = rgb;
-        palette.swatches.push(symphony_core::palette::Swatch {
-            id,
-            name: format!("#{r:02X}{g:02X}{b:02X}"),
-            rgb,
-            opacity: 255,
-            protected: false,
-            dynamics: None,
-        });
-        self.apply_palette("Pick screen colour", palette, Vec::new());
-        self.swatch = id;
+        self.add_colour("Pick screen colour", format!("#{r:02X}{g:02X}{b:02X}"), rgb);
     }
 
     pub fn rename_swatch(&mut self, id: Id, name: &str) {

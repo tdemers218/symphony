@@ -317,6 +317,7 @@ struct SymphonyApp {
     search_uses: std::collections::HashMap<String, u32>,
     node_view: node::NodeViewState,
     manual: views::manual::ManualState,
+    colour_lab: views::colour_lab::LabState,
     timing: timing::TimingState,
     export: export::ExportDialog,
     maximised: Option<View>,
@@ -1103,6 +1104,7 @@ impl SymphonyApp {
             search_uses,
             node_view: Default::default(),
             manual: Default::default(),
+            colour_lab: Default::default(),
             timing: Default::default(),
             export: Default::default(),
             maximised: None,
@@ -1168,15 +1170,30 @@ impl SymphonyApp {
     /// The Manual opens as a floating window big enough to read, unless
     /// it's already open somewhere; dock it like any view.
     fn show_manual(&mut self, ctx: &egui::Context) {
+        self.show_floating(ctx, View::Manual);
+    }
+
+    /// Views that aren't in any workspace preset (the Manual, the Colour
+    /// Lab) open as a floating window of a useful size; others join the
+    /// focused section. A view that's already open comes to the front.
+    fn show_floating(&mut self, ctx: &egui::Context, view: View) {
+        let size = match view {
+            View::Manual => egui::vec2(780.0, 640.0),
+            View::ColourLab => egui::vec2(760.0, 560.0),
+            _ => {
+                self.show_view(view);
+                return;
+            }
+        };
         self.maximised = None;
         let screen = ctx.content_rect();
         let layout = self.layout_mut();
-        if let Some(path) = layout.find_tab(&View::Manual) {
+        if let Some(path) = layout.find_tab(&view) {
             let _ = layout.set_active_tab(path);
             return;
         }
-        let size = egui::vec2(780.0, 640.0).min(screen.size() - egui::vec2(80.0, 80.0));
-        let surface = layout.add_window(vec![View::Manual]);
+        let size = size.min(screen.size() - egui::vec2(80.0, 80.0));
+        let surface = layout.add_window(vec![view]);
         if let Some(window) = layout.get_window_state_mut(surface) {
             window
                 .set_position(screen.center() - size / 2.0)
@@ -2153,7 +2170,7 @@ impl SymphonyApp {
         ui.menu_button("Windows", |ui| {
             for v in View::ALL {
                 if ui.button(v.title()).clicked() {
-                    self.show_view(v);
+                    self.show_floating(ui.ctx(), v);
                     ui.close();
                 }
             }
@@ -3384,10 +3401,15 @@ impl SymphonyApp {
                     Command::ShowView(v),
                     &format!("view.show.{v:?}"),
                 )
-                .words(if v == View::Multiplane {
-                    "window panel tab parallax depth side staging stage 3d orbit guides"
-                } else {
-                    "window panel tab"
+                .words(match v {
+                    View::Multiplane => {
+                        "window panel tab parallax depth side staging stage 3d orbit guides"
+                    }
+                    View::ColourLab => {
+                        "window panel tab light lighting shading shadow highlight sphere cube \
+                         rim bounce blend mode recipe multiply screen cel tones"
+                    }
+                    _ => "window panel tab",
                 }),
             );
         }
@@ -3661,7 +3683,7 @@ impl SymphonyApp {
             Command::Action(a) => self.run(ctx, a),
             Command::ShowView(v) => {
                 self.maximised = None;
-                self.show_view(v);
+                self.show_floating(ctx, v);
             }
             Command::OpenPreferences => self.show_preferences = true,
             Command::OpenExport(f) => self.export.open(f, &self.s),
@@ -4403,6 +4425,7 @@ struct Viewer<'a> {
     drawing: &'a mut camera::CanvasState,
     node_view: &'a mut node::NodeViewState,
     manual: &'a mut views::manual::ManualState,
+    colour_lab: &'a mut views::colour_lab::LabState,
     function: &'a mut function::FunctionState,
     timing: &'a mut timing::TimingState,
     samples: &'a [PenSample],
@@ -4465,6 +4488,7 @@ impl Viewer<'_> {
             View::UndoHistory => panels::undo_history(ui, self.s),
             View::Library => panels::planned(ui, "Library (templates and symbols)", "M6"),
             View::Manual => views::manual::ui(ui, self.manual),
+            View::ColourLab => views::colour_lab::ui(ui, self.s, self.colour_lab),
         }
     }
 }
@@ -5190,6 +5214,7 @@ impl SymphonyApp {
             drawing: &mut self.drawing,
             node_view: &mut self.node_view,
             manual: &mut self.manual,
+            colour_lab: &mut self.colour_lab,
             function: &mut self.function,
             timing: &mut self.timing,
             samples: &samples,
@@ -5345,6 +5370,13 @@ impl SymphonyApp {
             });
         self.show_licences = open;
         self.file_drops(&ctx);
+        // "Colour Lab…" in a colour editor.
+        if let Some(rgb) =
+            ctx.data_mut(|d| d.remove_temp::<[u8; 3]>(views::colour_lab::open_request()))
+        {
+            self.colour_lab.use_colour(rgb);
+            self.show_floating(&ctx, View::ColourLab);
+        }
         // Screenshot mode: SYMPHONY_SHOT_MAX=<view title> fills the window
         // with that view (Maximise view), for close-up shots.
         if self.shot.is_some() {
@@ -5367,6 +5399,17 @@ impl SymphonyApp {
                     d.insert_persisted(egui::Id::unique("colour-editor-layout"), layout);
                     d.insert_temp(egui::Id::unique("shot-open-colour-editor"), true);
                 });
+            }
+            // SYMPHONY_SHOT_LAB=<x>,<y>: the Colour Lab with that pixel picked.
+            if let Some((x, y)) = std::env::var("SYMPHONY_SHOT_LAB")
+                .ok()
+                .and_then(|v| {
+                    v.split_once(',')
+                        .map(|(x, y)| (x.parse().ok(), y.parse().ok()))
+                })
+                .and_then(|(x, y)| Some((x?, y?)))
+            {
+                self.colour_lab.pick([x, y]);
             }
             // SYMPHONY_SHOT_SWATCH=<index>: the current colour.
             if let Some(sw) = std::env::var("SYMPHONY_SHOT_SWATCH")

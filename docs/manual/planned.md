@@ -35,12 +35,10 @@ Static colours stay the default; everything below is optional.
   (**Natural variation**), or changes with pressure, direction, tilt or
   speed, or blends several colours. The same stroke always gets the same
   colours, so reopening a scene, undoing or rendering never changes them.
-- **Shadow and highlight suggestions** for the current colour, and a
-  **target colour**: pick the result you want and get the colour to
-  paint with for the current blend mode.
-- **Colour Lab**: a separate view to try colours under a light on a
-  sphere, cube, cloth or your own artwork, and save the ramp to the
-  palette.
+- **Shadow and highlight suggestions** right in the colour editor.
+- **More in the [Colour Lab](colour.md#colour-lab)**: a cylinder and
+  cloth, your own artwork as the surface, saving a whole ramp to the
+  palette, and different blend modes for the light and the shadow.
 - **Linked palettes**: a skin colour whose shadow and highlight follow
   it when you change it, and day, sunset and night versions of a palette.
 

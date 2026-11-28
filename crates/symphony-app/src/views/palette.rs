@@ -88,7 +88,7 @@ fn placeholder(here: Option<View>) -> &'static str {
         Some(View::Multiplane) => "Search camera, depth, and staging…",
         Some(View::Camera) => "Search camera, playback, and views…",
         Some(View::Timeline | View::Xsheet) => "Search frames, layers, and timing…",
-        Some(View::Colour) => "Search colours and palettes…",
+        Some(View::Colour | View::ColourLab) => "Search colours and palettes…",
         Some(View::Function) => "Search keyframes and timing…",
         Some(View::ToolProperties | View::LayerProperties) => {
             "Search tools, properties, and settings…"
