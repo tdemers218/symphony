@@ -109,7 +109,7 @@ A paper timing chart in a glass-lite finish:
 - **Controls:** a glass pill bar next to the point, placed where it hides least of the chart (above, below, or beside the point), with More for the rest. The same settings are in Node Properties. Esc finishes editing.
 - **Colours:** soft tones from the interface's own family (the Function view's curves), away from its meanings (selection blue, time amber, danger red).
   New charts take them in a fixed order: lilac, mint, aqua, rose, lime, periwinkle, orchid, sage. Each takes the first colour no chart uses yet, so a habit like charting the head first gives the same colours in every scene. Pick any other colour from the swatches in More or in Node Properties.
-- **Shadow, not glow:** the line and ticks sit on a soft drop shadow, like the glass chips. Tristan chose it over a coloured glow after comparing the two.
+- **Shadow, not glow:** the line and ticks sit on a soft drop shadow, like the glass chips. Tried in place of a coloured glow at Tristan's request; the side-by-side is with him to confirm.
 
 ## Performance ([18])
 
