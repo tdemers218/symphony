@@ -35,6 +35,10 @@ pub struct Smoother {
     amount: f32,
     last: Option<Point>,
     last_raw: Option<Point>,
+    leash: f32,
+    stabilized: Option<Point>,
+    preserve_corners: bool,
+    direction: Option<[f32; 2]>,
 }
 
 impl Smoother {
@@ -43,18 +47,68 @@ impl Smoother {
             amount: amount.clamp(0.0, 0.95),
             last: None,
             last_raw: None,
+            leash: 0.0,
+            stabilized: None,
+            preserve_corners: false,
+            direction: None,
         }
+    }
+
+    /// Let the pen lead the drawn point by up to this distance.
+    pub fn with_stabilization(mut self, radius: f32) -> Self {
+        self.leash = radius.max(0.0);
+        self
+    }
+
+    pub fn with_corner_preservation(mut self, on: bool) -> Self {
+        self.preserve_corners = on;
+        self
     }
 
     /// Feed one raw point. Returns the smoothed point to append, or `None`
     /// if it's too close to the previous one to matter.
     pub fn push(&mut self, raw: Point, min_dist: f32) -> Option<Point> {
+        let mut corner = false;
+        if self.preserve_corners {
+            if let Some(previous) = self.last_raw {
+                let direction = [raw.x - previous.x, raw.y - previous.y];
+                let length = direction[0].hypot(direction[1]);
+                if length > min_dist.max(0.001) {
+                    let unit = direction.map(|axis| axis / length);
+                    corner = self
+                        .direction
+                        .is_some_and(|d| d[0] * unit[0] + d[1] * unit[1] < 0.65);
+                    self.direction = Some(unit);
+                }
+            }
+        }
         self.last_raw = Some(raw);
+        let raw = if self.leash > 0.0 {
+            let mut point = raw;
+            if let Some(previous) = self.stabilized {
+                let distance = (raw.x - previous.x).hypot(raw.y - previous.y);
+                let travel = if distance > self.leash {
+                    1.0 - self.leash / distance
+                } else {
+                    0.0
+                };
+                point.x = previous.x + (raw.x - previous.x) * travel;
+                point.y = previous.y + (raw.y - previous.y) * travel;
+            }
+            self.stabilized = Some(point);
+            point
+        } else {
+            raw
+        };
         let Some(prev) = self.last else {
             self.last = Some(raw);
             return Some(raw);
         };
-        let a = 1.0 - self.amount;
+        let a = if corner {
+            (1.0 - self.amount).max(0.8)
+        } else {
+            1.0 - self.amount
+        };
         let p = Point {
             x: prev.x + (raw.x - prev.x) * a,
             y: prev.y + (raw.y - prev.y) * a,
@@ -328,6 +382,22 @@ mod tests {
         assert_eq!(pressure_curve(0.0, 2.0), 0.0);
         assert_eq!(pressure_curve(1.0, 0.5), 1.0);
         assert!(pressure_curve(0.5, 0.5) > 0.5);
+    }
+
+    #[test]
+    fn stabilization_filters_small_moves_and_reaches_the_lift() {
+        let mut smoother = Smoother::new(0.0).with_stabilization(3.0);
+        let point = |x| Point {
+            x,
+            y: 0.0,
+            pressure: 1.0,
+            pen: Default::default(),
+        };
+        assert_eq!(smoother.push(point(0.0), 0.1), Some(point(0.0)));
+        assert_eq!(smoother.push(point(2.0), 0.1), None);
+        let stabilized = smoother.push(point(7.0), 0.1).unwrap();
+        assert!((stabilized.x - 4.0).abs() < 1e-5);
+        assert_eq!(smoother.finish(), Some(point(7.0)));
     }
 
     #[test]

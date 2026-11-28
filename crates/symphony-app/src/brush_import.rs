@@ -91,6 +91,8 @@ fn settings(b: &Brush, tip: Option<u64>, grain: Option<u64>) -> BrushSettings {
         min_width: (max * lightest).min(max),
         max_width: max,
         smoothing: b.smoothing.clamp(0.0, 0.95),
+        stabilization: Default::default(),
+        preserve_corners: false,
         tips: Tips::default(),
         stencil: None,
         // Imported brushes are textured vector brushes, as in Harmony:
@@ -194,6 +196,24 @@ fn save(img: &image::GrayImage, dir: &Path) -> Option<String> {
     Some(name)
 }
 
+// A clean outline needs a substantial opaque core. Screen out soft,
+// low-flow tips whose appearance comes primarily from transparency.
+fn suitable_vector_conversion(brush: &Brush) -> bool {
+    if brush.opacity < 0.6 || brush.flow < 0.4 {
+        return false;
+    }
+    let Some(tip) = &brush.tip else {
+        return brush.grain.is_none() && brush.hardness >= 0.6;
+    };
+    let (visible, opaque) = tip.pixels().fold((0, 0), |(visible, opaque), pixel| {
+        (
+            visible + u32::from(pixel[0] >= 32),
+            opaque + u32::from(pixel[0] >= 192),
+        )
+    });
+    visible > 0 && opaque >= visible.div_ceil(3)
+}
+
 fn run(paths: &[PathBuf], library: Option<&Path>) -> Outcome {
     let mut out = Outcome {
         presets: Vec::new(),
@@ -227,6 +247,7 @@ fn run(paths: &[PathBuf], library: Option<&Path>) -> Outcome {
                         source: Some(b.source.title().to_owned()),
                         tip,
                         grain,
+                        vector_conversion: Some(suitable_vector_conversion(b)),
                     });
                     added += 1;
                 }

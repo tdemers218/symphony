@@ -97,6 +97,19 @@ enum ToolDock {
     Bottom,
 }
 
+#[derive(Clone, Copy, Default)]
+struct ToolFlyout {
+    hovered: Option<(Tool, f64)>,
+    open: Option<Tool>,
+    dragging: bool,
+    keep_until: f64,
+}
+
+struct ToolFlyoutResponse {
+    rect: egui::Rect,
+    chosen: bool,
+}
+
 impl ToolDock {
     const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Top, Self::Bottom];
 
@@ -652,10 +665,11 @@ impl SymphonyApp {
         let stroke_detail = saved.as_ref().and_then(|s| s.stroke_detail);
         let colours = saved.as_ref().and_then(|s| s.colours);
         let use_openh264 = saved.as_ref().is_none_or(|s| s.use_openh264);
-        let presets = saved
+        let mut presets = saved
             .as_ref()
             .and_then(|s| s.presets.clone())
             .unwrap_or_default();
+        presets.upgrade_builtin_brushes();
         let search_uses = saved
             .as_ref()
             .map(|s| s.search_uses.clone())
@@ -2210,6 +2224,22 @@ impl SymphonyApp {
             Tool::Zoom,
         ];
         let context = self.s.tool_context();
+        let id = ui.scope_id().with("tool-flyout");
+        let mut flyout: ToolFlyout = ui.data(|data| data.get_temp(id)).unwrap_or_default();
+        let (now, pointer, released, down, escape) = ui.input(|i| {
+            (
+                i.time,
+                i.pointer.interact_pos(),
+                i.pointer.primary_released(),
+                i.pointer.primary_down(),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        if escape {
+            flyout = ToolFlyout::default();
+        }
+        let mut hovered = None;
+        let mut anchor = None;
         ui.spacing_mut().item_spacing = egui::Vec2::splat(2.0);
         for tool in TOOLS.into_iter().filter(|tool| tool.fits(context)) {
             let mut tip = keymap::tooltip(self.profile, tool_action(tool));
@@ -2223,10 +2253,8 @@ impl SymphonyApp {
                     tip.push_str("\nDrag, scale or rotate the selection");
                     Icon::Transform
                 }
-                // Both tips make vector strokes. The icon shows whether
-                // the current brush uses a texture.
-                Tool::Brush if !crate::views::panels::is_bitmap(&self.s.brush) => Icon::Pen,
-                Tool::Brush => Icon::Brush,
+                Tool::Brush if panels::is_textured_vector(&self.s.brush) => Icon::Pencil,
+                Tool::Brush => Icon::Pen,
                 Tool::Transform => {
                     tip = format!("Transform the peg\n{tip}");
                     Icon::Transform
@@ -2243,6 +2271,28 @@ impl SymphonyApp {
                 tool.planned_for().is_none(),
                 &tip,
             );
+            if matches!(tool, Tool::Select | Tool::Brush | Tool::Paint) {
+                let marker = response.rect.right_bottom() - egui::vec2(4.0, 4.0);
+                ui.painter().add(egui::Shape::convex_polygon(
+                    vec![
+                        marker,
+                        marker - egui::vec2(5.0, 0.0),
+                        marker - egui::vec2(0.0, 5.0),
+                    ],
+                    theme::TEXT_SECONDARY,
+                    egui::Stroke::NONE,
+                ));
+                if response.hovered() {
+                    hovered = Some(tool);
+                }
+                if response.is_pointer_button_down_on() && down && !escape {
+                    flyout.open = Some(tool);
+                    flyout.dragging = true;
+                }
+                if flyout.open == Some(tool) {
+                    anchor = Some((tool, response.rect));
+                }
+            }
             if response.clicked() {
                 self.s.tool = tool;
             }
@@ -2250,6 +2300,145 @@ impl SymphonyApp {
                 self.s.tool = tool;
                 self.open_tool_properties();
             }
+        }
+        if flyout.hovered.map(|(tool, _)| tool) != hovered {
+            flyout.hovered = hovered.map(|tool| (tool, now));
+        }
+        if let Some((tool, since)) = flyout.hovered.filter(|_| !flyout.dragging && !escape) {
+            let remaining = 0.30 - (now - since);
+            if remaining <= 0.0 {
+                if flyout.open != Some(tool) {
+                    flyout.open = Some(tool);
+                    ui.ctx().request_repaint();
+                }
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+            }
+        }
+        if let Some((tool, rect)) = anchor.filter(|(tool, _)| flyout.open == Some(*tool)) {
+            let menu = self.tool_flyout(ui.ctx(), id, tool, rect, flyout.dragging, released);
+            let inside = pointer.is_some_and(|p| rect.contains(p) || menu.rect.contains(p));
+            if inside || flyout.dragging && down {
+                flyout.keep_until = now + 0.16;
+            }
+            if menu.chosen || (flyout.dragging && !down) || !inside && now >= flyout.keep_until {
+                flyout.open = None;
+                if flyout.dragging || menu.chosen {
+                    flyout.hovered = None;
+                }
+                flyout.dragging = false;
+            } else if !inside {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(
+                        (flyout.keep_until - now).max(0.0),
+                    ));
+            }
+        }
+        ui.data_mut(|data| data.insert_temp(id, flyout));
+    }
+
+    fn tool_flyout(
+        &mut self,
+        ctx: &egui::Context,
+        id: egui::Id,
+        tool: Tool,
+        button: egui::Rect,
+        dragging: bool,
+        released: bool,
+    ) -> ToolFlyoutResponse {
+        use session::PaintMode;
+        let (pivot, at) = match self.tool_dock {
+            ToolDock::Left => (egui::Align2::LEFT_TOP, button.right_top()),
+            ToolDock::Right => (egui::Align2::RIGHT_TOP, button.left_top()),
+            ToolDock::Top => (egui::Align2::LEFT_TOP, button.left_bottom()),
+            ToolDock::Bottom => (egui::Align2::LEFT_BOTTOM, button.left_top()),
+        };
+        let menu = egui::Area::new(id.with("menu"))
+            .order(egui::Order::Foreground)
+            .pivot(pivot)
+            .fixed_pos(at)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(theme::GLASS_FLOATING)
+                    .show(ui, |ui| {
+                        ui.set_width(156.0);
+                        let pointer = ui.input(|i| i.pointer.interact_pos());
+                        let row = |ui: &mut egui::Ui, name: &str, selected: bool| {
+                            let button = egui::Button::selectable(selected, name)
+                                .min_size(egui::vec2(156.0, 24.0));
+                            let response = ui.add(button);
+                            let hit =
+                                dragging && pointer.is_some_and(|p| response.rect.contains(p));
+                            if hit && !released {
+                                ui.painter().rect_filled(
+                                    response.rect,
+                                    theme::RADIUS_CONTROL,
+                                    theme::ACCENT_SELECT.gamma_multiply(0.23),
+                                );
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            response.clicked() || hit && released
+                        };
+                        match tool {
+                            Tool::Select => {
+                                let selected = if self.s.cutter_mode {
+                                    2
+                                } else {
+                                    usize::from(self.s.marquee_mode)
+                                };
+                                for (index, name) in
+                                    ["Lasso", "Marquee", "Cutter"].into_iter().enumerate()
+                                {
+                                    if row(ui, name, self.s.tool == tool && index == selected) {
+                                        self.s.tool = tool;
+                                        self.s.cutter_mode = index == 2;
+                                        self.s.marquee_mode = index == 1;
+                                        return true;
+                                    }
+                                }
+                            }
+                            Tool::Brush => {
+                                let textured = panels::is_textured_vector(&self.s.brush);
+                                for (mode, name) in [(false, "Vector"), (true, "Textured Vector")] {
+                                    if row(ui, name, self.s.tool == tool && textured == mode) {
+                                        panels::select_brush_kind(
+                                            &mut self.s,
+                                            &mut self.presets,
+                                            mode,
+                                        );
+                                        self.s.tool = tool;
+                                        return true;
+                                    }
+                                }
+                            }
+                            Tool::Paint => {
+                                for mode in [
+                                    PaintMode::Paint,
+                                    PaintMode::PaintUnpainted,
+                                    PaintMode::Repaint,
+                                    PaintMode::Unpaint,
+                                ] {
+                                    if row(
+                                        ui,
+                                        mode.title(),
+                                        self.s.tool == tool && self.s.paint_mode == mode,
+                                    ) {
+                                        self.s.tool = tool;
+                                        self.s.paint_mode = mode;
+                                        return true;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        false
+                    })
+                    .inner
+            });
+        ToolFlyoutResponse {
+            rect: menu.response.rect,
+            chosen: menu.inner,
         }
     }
 

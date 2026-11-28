@@ -293,15 +293,10 @@ fn preset_list(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, tool: 
             false,
         );
     });
-    // Two kinds of brush, as Tristan set out: Bitmap lists the brushes
-    // made for bitmap painting (textured stamps, like Krita's and
-    // Photoshop's). Vector lists clean vector brushes plus a vector version
-    // of every bitmap brush: the same name, size and smoothing as a solid
-    // line (an approximation; stamps don't map exactly onto curves).
     let list = if pencil {
         presets.list(tool).to_vec()
     } else {
-        brush_list(presets.list(tool), is_bitmap(&current_settings))
+        brush_list(presets.list(tool), is_textured_vector(&current_settings))
     };
     let [r, g, b, a] = s.doc.swatch_rgba(s.swatch);
     let ink = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
@@ -513,25 +508,33 @@ fn export_presets(s: &mut Session, presets: &Presets) {
     });
 }
 
-/// The Brush presets of one kind: Bitmap is the textured (bitmap-native)
-/// ones; Vector is the clean ones plus a vector version of each bitmap one.
-pub fn brush_list(all: &[Preset], bitmap: bool) -> Vec<Preset> {
-    if bitmap {
+/// Keep useful outline conversions alongside native vector presets.
+pub fn brush_list(all: &[Preset], textured: bool) -> Vec<Preset> {
+    if textured {
         all.iter()
-            .filter(|p| is_bitmap(&p.settings))
+            .filter(|p| is_textured_vector(&p.settings))
             .cloned()
             .collect()
     } else {
-        all.iter().map(vector_version).collect()
+        all.iter()
+            .filter(|p| {
+                !is_textured_vector(&p.settings)
+                    || p.vector_conversion.unwrap_or_else(|| {
+                        p.settings
+                            .texture
+                            .is_some_and(|t| t.opacity >= 0.6 && t.flow >= 0.4 && t.grain.is_none())
+                    })
+            })
+            .map(vector_version)
+            .collect()
     }
 }
 
-/// Does this brush paint bitmap stamps (rather than vector lines)?
-pub fn is_bitmap(b: &BrushSettings) -> bool {
+pub fn is_textured_vector(b: &BrushSettings) -> bool {
     b.texture.is_some_and(|t| !t.vector)
 }
 
-/// A brush as a true vector brush: a bitmap brush keeps its name, size,
+/// A vector conversion keeps the brush name, size,
 /// tip and dynamics, but its tip's shape is stamped along the line and
 /// merged into one clean outline instead of painting pixels.
 fn vector_version(p: &Preset) -> Preset {
@@ -542,6 +545,34 @@ fn vector_version(p: &Preset) -> Preset {
     v
 }
 
+pub fn select_brush_kind(s: &mut Session, presets: &mut Presets, textured: bool) {
+    if textured == is_textured_vector(&s.brush) {
+        return;
+    }
+    let tool = PresetTool::Brush;
+    let want = textured;
+    let list = brush_list(presets.list(tool), want);
+    let current = presets.current(tool);
+    let pick = list
+        .iter()
+        .find(|p| Some(p.name.as_str()) == current)
+        .or_else(|| list.first())
+        .cloned();
+    match pick {
+        Some(p) => {
+            s.brush = p.settings;
+            presets.set_current(tool, Some(p.name));
+        }
+        None => {
+            s.brush.texture = want.then(|| symphony_core::stroke::StrokeTexture {
+                spacing: 0.1,
+                ..Default::default()
+            });
+            presets.set_current(tool, None);
+        }
+    }
+}
+
 fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pencil: bool) {
     let tool = if pencil {
         PresetTool::Pencil
@@ -550,45 +581,17 @@ fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pen
     };
     // First the kind of brush, since it decides the list below.
     if !pencil {
-        let bitmap = is_bitmap(&s.brush);
-        let mut want = bitmap;
+        let textured = is_textured_vector(&s.brush);
+        let mut want = textured;
         widgets::segmented(
             ui,
             "brush-kind",
             &mut want,
-            &[(false, "Vector"), (true, "Bitmap")],
+            &[(false, "Vector"), (true, "Textured Vector")],
             false,
         );
-        if want != bitmap {
-            // Keep the same brush where it exists in the other kind: a
-            // bitmap brush's vector version, or back to the bitmap one.
-            let current = presets.current(tool).map(str::to_owned);
-            let same = current
-                .as_ref()
-                .and_then(|name| presets.list(tool).iter().find(|p| &p.name == name).cloned());
-            let pick = match (want, same) {
-                (false, Some(p)) => Some(vector_version(&p)),
-                (true, Some(p)) if is_bitmap(&p.settings) => Some(p),
-                _ => presets
-                    .list(tool)
-                    .iter()
-                    .find(|p| is_bitmap(&p.settings) == want)
-                    .cloned()
-                    .map(|p| if want { p } else { vector_version(&p) }),
-            };
-            match pick {
-                Some(p) => {
-                    s.brush = p.settings;
-                    presets.set_current(tool, Some(p.name));
-                }
-                None => {
-                    s.brush.texture = want.then(|| symphony_core::stroke::StrokeTexture {
-                        spacing: 0.1,
-                        ..Default::default()
-                    });
-                    presets.set_current(tool, None);
-                }
-            }
+        if want != textured {
+            select_brush_kind(s, presets, want);
         }
         ui.add_space(6.0);
     }
@@ -601,19 +604,35 @@ fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pen
     b.max_width = b.max_width.max(0.5);
     size_slider(ui, "Minimum size", &mut b.min_width, 60.0);
     b.min_width = b.min_width.min(b.max_width);
+    use crate::session::Stabilization;
     slider(ui, "Smoothing", &mut b.smoothing, 0.0..=0.95);
+    hint(ui, "Stabilization");
+    widgets::segmented(
+        ui,
+        "brush-stabilization",
+        &mut b.stabilization,
+        &[
+            (Stabilization::Off, "Off"),
+            (Stabilization::Light, "Light"),
+            (Stabilization::Strong, "Strong"),
+        ],
+        false,
+    );
+    ui.collapsing("Smoothing options", |ui| {
+        widgets::checkbox(ui, &mut b.preserve_corners, "Preserve sharp turns")
+            .on_hover_text("Use less smoothing when the pen changes direction sharply.");
+    });
     hint(
         ui,
         if pencil && b.stencil.is_some() {
             "This preset's thickness stencil sets the thickness between minimum and maximum, ignoring pen pressure."
         } else {
-            "Pen pressure sets the size between minimum and maximum. Smoothing steadies the line as you draw."
+            "Pressure changes size. Smoothing filters small changes in the path. Stabilization lets the pen lead the stroke."
         },
     );
     if !pencil {
         if let Some(t) = &mut b.texture {
             slider(ui, "Spacing", &mut t.spacing, 0.01..=3.0);
-            slider(ui, "Opacity", &mut t.opacity, 0.0..=1.0);
             slider(ui, "Flow", &mut t.flow, 0.01..=1.0);
             hint(
                 ui,
@@ -641,7 +660,7 @@ fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pen
             );
         }
     }
-    if pencil {
+    if b.texture.is_none() {
         ui.add_space(4.0);
         egui::Grid::new("pencil-tips")
             .num_columns(3)
@@ -652,8 +671,13 @@ fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pen
                     ("End tip", &mut b.tips.end),
                 ] {
                     hint(ui, label);
-                    ui.selectable_value(tip, Tip::Round, "Round");
-                    ui.selectable_value(tip, Tip::Flat, "Flat");
+                    widgets::segmented(
+                        ui,
+                        label,
+                        tip,
+                        &[(Tip::Round, "Round"), (Tip::Flat, "Flat")],
+                        false,
+                    );
                     ui.end_row();
                 }
             });
@@ -665,6 +689,74 @@ fn brush_controls(ui: &mut egui::Ui, s: &mut Session, presets: &mut Presets, pen
         s.pencil = b;
     } else {
         s.brush = b;
+    }
+}
+
+fn selected_brush_properties(ui: &mut egui::Ui, s: &mut Session, presets: &Presets) {
+    s.validate_selection();
+    if s.stylable_strokes().next().is_none() {
+        return;
+    }
+    section(ui, "Selected strokes");
+    ui.menu_button("Apply brush preset", |ui| {
+        for (label, textured) in [("Vector", false), ("Textured Vector", true)] {
+            ui.menu_button(label, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(230.0)
+                    .show(ui, |ui| {
+                        for preset in brush_list(presets.list(PresetTool::Brush), textured) {
+                            if ui.button(&preset.name).clicked() {
+                                let settings = preset.settings;
+                                s.style_selected_strokes(|stroke| {
+                                    stroke.kind = symphony_core::stroke::StrokeKind::Brush;
+                                    stroke.min_width = settings.min_width;
+                                    stroke.max_width = settings.max_width;
+                                    stroke.texture = settings.texture;
+                                    stroke.tips = settings.tips;
+                                });
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+        }
+    })
+    .response
+    .on_hover_text("Change the mark while keeping its path and palette colour.");
+    for (label, start) in [("Start tip", true), ("End tip", false)] {
+        let mut tips = s
+            .stylable_strokes()
+            .filter(|stroke| stroke.texture.is_none())
+            .map(|stroke| {
+                if start {
+                    stroke.tips.start
+                } else {
+                    stroke.tips.end
+                }
+            });
+        let Some(first) = tips.next() else { continue };
+        let mut tip = tips.all(|tip| tip == first).then_some(first);
+        drop(tips);
+        hint(ui, label);
+        if widgets::segmented(
+            ui,
+            ("selected-tip", label),
+            &mut tip,
+            &[(Some(Tip::Round), "Round"), (Some(Tip::Flat), "Flat")],
+            false,
+        ) {
+            if let Some(tip) = tip {
+                s.style_selected_strokes(|stroke| {
+                    if stroke.texture.is_none() {
+                        if start {
+                            stroke.tips.start = tip;
+                        } else {
+                            stroke.tips.end = tip;
+                        }
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -768,6 +860,7 @@ fn tool_properties_body(
                     widgets::checkbox(ui, &mut s.cutter_mode, "Cutter")
                         .on_hover_text("Draw a selection boundary to split the artwork and select the pieces inside.");
                     widgets::checkbox(ui, &mut s.show_selected_points, "Show selected points");
+                    selected_brush_properties(ui, s, presets);
                 }
 
                 widgets::segmented(
