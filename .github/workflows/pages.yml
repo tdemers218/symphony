@@ -1,0 +1,53 @@
+# The website: the presentation page (docs/index.html) and the manual
+# (docs/manual, built by crates/symphony-manual). Deploys on every push to
+# main that touches either.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/index.html"
+      - "docs/presentation/**"
+      - "docs/manual/**"
+      - "crates/symphony-manual/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the manual's links and anchors
+        run: cargo test -p symphony-manual
+      - name: Build the site
+        run: |
+          mkdir -p _site
+          cp docs/index.html _site/
+          cp -R docs/presentation _site/presentation
+          cargo run --release -p symphony-manual --features site --bin manual-site -- _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

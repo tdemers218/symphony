@@ -1,0 +1,18 @@
+[package]
+name = "symphony-manual"
+description = "Symphony's user manual (docs/manual), shared by the app's Manual view and the website."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false }
+
+[features]
+# The website builder (src/bin/manual-site.rs) needs the HTML writer; the app
+# doesn't.
+site = ["pulldown-cmark/html"]
+
+[[bin]]
+name = "manual-site"
+required-features = ["site"]

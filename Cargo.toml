@@ -11,6 +11,7 @@ members = [
     "crates/symphony-ui",
     "crates/symphony-launcher",
     "crates/symphony-brushes",
+    "crates/symphony-manual",
 ]
 
 [workspace.package]

@@ -339,6 +339,13 @@ project in `SYMPHONY_PERF_OPEN`): `real_scene_stamp_cost` and
   Preferences and the loading screen), checked against DESIGN §15. Larger
   changes get a written review in `docs/reviews/`, using the
   *design-review* method: Must / Should / Could, plus what works.
+- **E11.6 The manual changes with the feature.** A change people can see
+  or use updates `docs/manual/` in the same commit: what it does, where it
+  is, its keys. Write steps and facts, not praise ("Hold Shift to snap to
+  22.5°", not "a powerful new snapping system"). Mark anything unbuilt
+  **Planned**. The shortcuts page is generated from the keymap
+  (`SYMPHONY_UPDATE_MANUAL=1 cargo test -p symphony-app manual_shortcuts`),
+  and `cargo test -p symphony-manual` fails on broken links between pages.
 - **E12.1** Stable Rust. `cargo fmt`. `clippy -D warnings` clean.
 - **E12.2 `unsafe` is only allowed in platform backends** (pen, windowing
   glue), and every block has a `// SAFETY:` comment.

@@ -4,6 +4,7 @@ mod colour_picker;
 pub mod export;
 pub mod function;
 pub mod guides;
+pub mod manual;
 pub mod multiplane;
 pub mod node;
 pub mod palette;

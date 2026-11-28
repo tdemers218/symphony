@@ -52,6 +52,8 @@ pub enum Command {
     AddNode(symphony_core::graph::NodeKind),
     FollowChart,
     EditChart(symphony_core::graph::NodeId),
+    /// A manual page, at a heading if given.
+    OpenManual(&'static str, Option<String>),
 }
 
 /// Settings that search can flip directly.
@@ -80,6 +82,7 @@ pub enum Kind {
     Preset,
     Node,
     Go,
+    Manual,
 }
 
 impl Kind {
@@ -94,6 +97,7 @@ impl Kind {
             Kind::Preset => "Preset",
             Kind::Node => "Node",
             Kind::Go => "Go",
+            Kind::Manual => "Manual",
         }
     }
 }

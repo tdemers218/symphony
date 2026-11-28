@@ -4,6 +4,7 @@ Symphony is a free, open-source 2D animation app for drawing, timing, and
 node-based compositing.
 
 [Presentation page](https://tdemers218.github.io/symphony/) ·
+[Manual](https://tdemers218.github.io/symphony/manual/) ·
 [Preview builds](https://github.com/tdemers218/symphony/releases)
 
 ![An empty Symphony scene with the Camera view, drawing tools, colour palette, and Timeline](docs/presentation/workspace.png)
@@ -35,6 +36,7 @@ Not affiliated with Toon Boom. Built clean-room from public documentation
 - [Research](docs/RESEARCH.md) · [Language choice](docs/LANGUAGE.md) · [Roadmap](docs/ROADMAP.md) · [Tablets](docs/TABLETS.md)
 - [AI in Symphony](docs/AI-POLICY.md): no generative AI, ever.
 - [Codecs](docs/CODECS.md): movie export uses Cisco's OpenH264, downloaded only when you ask.
+- [Manual](docs/manual/index.md): how to use Symphony, also on the [website](https://tdemers218.github.io/symphony/manual/) and in the app (**Help → Manual**).
 - [Testing Symphony](docs/TESTERS.md): install the launcher.
 - [Contributing](CONTRIBUTING.md): please read the clean-room rules first.
 

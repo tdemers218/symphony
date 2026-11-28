@@ -12,6 +12,8 @@ mod crash;
 mod import;
 mod keymap;
 mod layered;
+#[cfg(test)]
+mod manual_shortcuts;
 mod paint_links;
 mod perf;
 mod presets;
@@ -314,6 +316,7 @@ struct SymphonyApp {
     shot_search_opened: bool,
     search_uses: std::collections::HashMap<String, u32>,
     node_view: node::NodeViewState,
+    manual: views::manual::ManualState,
     timing: timing::TimingState,
     export: export::ExportDialog,
     maximised: Option<View>,
@@ -1021,6 +1024,7 @@ impl SymphonyApp {
             shot_search_opened: false,
             search_uses,
             node_view: Default::default(),
+            manual: Default::default(),
             timing: Default::default(),
             export: Default::default(),
             maximised: None,
@@ -1081,6 +1085,25 @@ impl SymphonyApp {
             .find(|(w, _)| *w == ws)
             .expect("every workspace has a layout")
             .1
+    }
+
+    /// The Manual opens as a floating window big enough to read, unless
+    /// it's already open somewhere; dock it like any view.
+    fn show_manual(&mut self, ctx: &egui::Context) {
+        self.maximised = None;
+        let screen = ctx.content_rect();
+        let layout = self.layout_mut();
+        if let Some(path) = layout.find_tab(&View::Manual) {
+            let _ = layout.set_active_tab(path);
+            return;
+        }
+        let size = egui::vec2(780.0, 640.0).min(screen.size() - egui::vec2(80.0, 80.0));
+        let surface = layout.add_window(vec![View::Manual]);
+        if let Some(window) = layout.get_window_state_mut(surface) {
+            window
+                .set_position(screen.center() - size / 2.0)
+                .set_size(size);
+        }
     }
 
     fn show_view(&mut self, view: View) {
@@ -2060,6 +2083,20 @@ impl SymphonyApp {
             self.menu_action(ui, Action::MaximiseView);
         });
         ui.menu_button("Help", |ui| {
+            if ui
+                .button("Manual")
+                .on_hover_text("How to use Symphony, also at tdemers218.github.io/symphony/manual")
+                .clicked()
+            {
+                self.show_manual(ui.ctx());
+                ui.close();
+            }
+            if ui.button("Keyboard shortcuts").clicked() {
+                self.manual.open("shortcuts", None);
+                self.show_manual(ui.ctx());
+                ui.close();
+            }
+            ui.separator();
             if ui.button("Licences").clicked() {
                 self.show_licences = true;
                 ui.close();
@@ -3032,6 +3069,30 @@ impl SymphonyApp {
                 }
             }
         }
+        // The manual: every page, and every section on it ("Manual: Draw
+        // the path (Smart Charts)"), straight to that heading.
+        for page in symphony_manual::PAGES {
+            out.push(
+                Entry::new(
+                    &format!("Manual: {}", page.title()),
+                    Kind::Manual,
+                    Command::OpenManual(page.slug, None),
+                    &format!("manual.{}", page.slug),
+                )
+                .words("help manual documentation docs guide how learn"),
+            );
+            for section in page.sections().into_iter().filter(|s| s.level == 2) {
+                out.push(
+                    Entry::new(
+                        &format!("Manual: {} ({})", section.title, page.title()),
+                        Kind::Manual,
+                        Command::OpenManual(page.slug, Some(section.anchor.clone())),
+                        &format!("manual.{}.{}", page.slug, section.anchor),
+                    )
+                    .words("help manual documentation how"),
+                );
+            }
+        }
         // Every blend mode is its own search result ("subtract", "glow",
         // "shadow"...), adding a Blend Modes node already set to it.
         for mode in symphony_core::graph::BlendMode::ALL {
@@ -3633,6 +3694,10 @@ impl SymphonyApp {
             Command::EditChart(id) => {
                 self.s.select_graph_node(id, true);
                 self.s.fit_tool_to_context();
+            }
+            Command::OpenManual(slug, anchor) => {
+                self.manual.open(slug, anchor);
+                self.show_manual(ctx);
             }
         }
     }
@@ -4259,6 +4324,7 @@ struct Viewer<'a> {
     camera: &'a mut camera::CanvasState,
     drawing: &'a mut camera::CanvasState,
     node_view: &'a mut node::NodeViewState,
+    manual: &'a mut views::manual::ManualState,
     function: &'a mut function::FunctionState,
     timing: &'a mut timing::TimingState,
     samples: &'a [PenSample],
@@ -4320,6 +4386,7 @@ impl Viewer<'_> {
             View::NodeLibrary => node::library(ui, self.s, self.node_view),
             View::UndoHistory => panels::undo_history(ui, self.s),
             View::Library => panels::planned(ui, "Library (templates and symbols)", "M6"),
+            View::Manual => views::manual::ui(ui, self.manual),
         }
     }
 }
@@ -5044,6 +5111,7 @@ impl SymphonyApp {
             camera: &mut self.camera,
             drawing: &mut self.drawing,
             node_view: &mut self.node_view,
+            manual: &mut self.manual,
             function: &mut self.function,
             timing: &mut self.timing,
             samples: &samples,
@@ -5199,6 +5267,21 @@ impl SymphonyApp {
             });
         self.show_licences = open;
         self.file_drops(&ctx);
+        // Screenshot mode: SYMPHONY_SHOT_MANUAL=<page>[#heading] opens the
+        // Manual there.
+        if let (Some(_), Ok(target)) = (&self.shot, std::env::var("SYMPHONY_SHOT_MANUAL")) {
+            if !self.shot_search_opened {
+                let (slug, anchor) = match target.split_once('#') {
+                    Some((p, a)) => (p.to_owned(), Some(a.to_owned())),
+                    None => (target, None),
+                };
+                if let Some(page) = symphony_manual::find(&slug) {
+                    self.manual.open(page.slug, anchor);
+                    self.show_manual(&ctx);
+                }
+                self.shot_search_opened = true;
+            }
+        }
         // Screenshot mode: SYMPHONY_SHOT_SEARCH="query" opens search typed.
         if let (Some(_), Ok(q)) = (&self.shot, std::env::var("SYMPHONY_SHOT_SEARCH")) {
             if !self.shot_search_opened {
