@@ -911,7 +911,9 @@ impl SymphonyApp {
                     s.select_graph_node(id, false);
                 }
                 // =point: on a point's frame, to review its card and handles.
-                s.frame = if std::env::var("SYMPHONY_SHOT_CHART").is_ok_and(|v| v == "point") {
+                s.frame = if std::env::var("SYMPHONY_SHOT_CHART")
+                    .is_ok_and(|v| v == "point" || v == "pose")
+                {
                     7
                 } else if follow {
                     11
@@ -982,6 +984,10 @@ impl SymphonyApp {
                 // SYMPHONY_SHOT_MIRROR: the Camera view mirrored, for review.
                 let mut c = camera::CanvasState::default();
                 c.mirrored = std::env::var_os("SYMPHONY_SHOT_MIRROR").is_some();
+                // SYMPHONY_SHOT_CHART=pose: a chart point with its rotate
+                // and scale needle showing.
+                c.chart_edit.show_pose =
+                    std::env::var("SYMPHONY_SHOT_CHART").is_ok_and(|v| v == "pose");
                 c
             },
             drawing: Default::default(),

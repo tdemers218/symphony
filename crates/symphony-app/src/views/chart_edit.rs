@@ -39,15 +39,24 @@ const STEPS: usize = 24;
 
 /// Charts without a colour of their own take one of these, by node, so
 /// several charts on one scene stay told apart (and keep their colour).
-/// No amber: that's the current frame's colour.
+/// Calm, mid-dark hues that read on the light stage and on artwork, kept
+/// away from the interface's meanings: no selection blue, time amber or
+/// danger red.
 const COLOURS: [[u8; 3]; 6] = [
-    [240, 122, 160],
-    [110, 196, 240],
-    [150, 214, 110],
-    [226, 118, 226],
-    [186, 150, 240],
-    [96, 214, 196],
+    [128, 96, 232],
+    [20, 150, 140],
+    [204, 84, 150],
+    [112, 146, 36],
+    [164, 82, 196],
+    [62, 128, 168],
 ];
+
+/// Canvas HUD glass (glass-lite: overlays over the canvas are nearly
+/// opaque, about 86%, with a faint light rim), premultiplied.
+const HUD: Color32 = Color32::from_rgba_premultiplied(26, 28, 31, 219);
+const HUD_RIM: Color32 = Color32::from_rgba_premultiplied(31, 31, 31, 31);
+/// Handles show when the pointer is this near their point.
+const HANDLE_REVEAL: f32 = 56.0;
 
 /// The colour chart `id` is drawn in.
 pub fn colour(chart: &Chart, id: NodeId) -> Color32 {
@@ -127,9 +136,13 @@ impl Pose {
 pub struct ChartEdit {
     /// What's being dragged, on which chart.
     dragging: Option<(NodeId, Grab)>,
-    /// A change from the point card not yet closed as an undo step (a
-    /// slider still held).
+    /// A change from the point bar not yet closed as an undo step (a
+    /// value still being dragged).
     card_pending: bool,
+    /// The rotate and scale needle is shown (toggled from the bar).
+    pub(crate) show_pose: bool,
+    /// The bar's size when last shown, to choose where it covers least.
+    bar_size: Option<Vec2>,
     /// Scene and edit count the charts were last checked at.
     stamp: Option<(String, u64)>,
     built: HashMap<NodeId, Built>,
@@ -286,14 +299,30 @@ pub fn ui(
     };
     let b = &state.built[&id];
     let chart = b.chart.clone();
+    // Only what's being worked on shows: a point's curve handles appear
+    // when the pointer comes near it (or it has handles of its own), the
+    // rotate and scale needle when it's switched on.
+    let here = chart.point_on(s.frame);
+    let dragging_kind = state.dragging.filter(|(n, _)| *n == id).map(|(_, g)| g);
     let handles = if editing && !chart.locked {
-        b.handles_on(s.frame)
+        let near = here.is_some_and(|p| {
+            matches!(p.tangent, Tangent::Manual { .. })
+                || pointer.is_some_and(|q| q.distance(screen(p.pos)) <= HANDLE_REVEAL)
+                || matches!(dragging_kind, Some(Grab::Handle(..)))
+        });
+        if near {
+            b.handles_on(s.frame)
+        } else {
+            Vec::new()
+        }
     } else {
         Vec::new()
     };
-    let pose = (editing && !chart.locked)
-        .then(|| Pose::new(&chart, &b.curve, s.frame, &screen))
-        .flatten();
+    let pose = (editing
+        && !chart.locked
+        && (state.show_pose || matches!(dragging_kind, Some(Grab::Turn(_) | Grab::Size(_)))))
+    .then(|| Pose::new(&chart, &b.curve, s.frame, &screen))
+    .flatten();
     // Points first, then handles, then ticks: the nearest of the first
     // kind within reach.
     let grab_at = |p: Pos2| {
@@ -363,7 +392,70 @@ pub fn ui(
         state.dragging = None;
         return false;
     }
-    card(ui, response, s, id, &chart, &mut state.card_pending);
+    // Esc, like Done: back to the layer, the chart stays.
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) && state.dragging.is_none() {
+        s.selected_node = s.doc.layers.get(s.selected).map(|l| l.node);
+        return true;
+    }
+    let anchor = here
+        .map(|p| screen(p.pos))
+        .or_else(|| b.mark(s.frame).map(|m| screen(m.pos)));
+    // The bar goes above or below the point, wherever it hides less of
+    // the chart (or under the needle when that's showing).
+    let size = state.bar_size.unwrap_or(Vec2::new(420.0, 30.0));
+    let bar_at = anchor.map(|at| {
+        use egui::Align2;
+        // Where the bar would really be: kept inside the canvas, as the
+        // Area keeps it.
+        let bounds = response.rect.shrink(8.0);
+        let clamp = |r: egui::Rect| {
+            let dx = (bounds.left() - r.left()).max(0.0) + (bounds.right() - r.right()).min(0.0);
+            let dy = (bounds.top() - r.top()).max(0.0) + (bounds.bottom() - r.bottom()).min(0.0);
+            r.translate(Vec2::new(dx, dy))
+        };
+        let covered = |r: egui::Rect| {
+            b.path.iter().filter(|&&p| r.contains(screen(p))).count()
+                + 8 * b
+                    .chart
+                    .points
+                    .iter()
+                    .filter(|p| r.expand(10.0).contains(screen(p.pos)))
+                    .count()
+                + pose.as_ref().map_or(0, |p| {
+                    50 * [p.knob(), p.size()]
+                        .iter()
+                        .filter(|q| r.expand(10.0).contains(**q))
+                        .count()
+                })
+                + usize::from(r.contains(at)) * 1000
+        };
+        // In order of preference: above, below, then beside the point.
+        let gap = 26.0;
+        [
+            (at - Vec2::new(0.0, gap), Align2::CENTER_BOTTOM),
+            (at + Vec2::new(0.0, gap), Align2::CENTER_TOP),
+            (at + Vec2::new(gap, 0.0), Align2::LEFT_CENTER),
+            (at - Vec2::new(gap, 0.0), Align2::RIGHT_CENTER),
+        ]
+        .into_iter()
+        .min_by_key(|&(pos, pivot)| covered(clamp(pivot.anchor_size(pos, size))))
+        .map(|(pos, pivot)| {
+            // Place it where it was measured, clamped.
+            let r = clamp(pivot.anchor_size(pos, size));
+            (r.min, Align2::LEFT_TOP)
+        })
+        .unwrap_or((at, Align2::CENTER_TOP))
+    });
+    state.bar_size = Some(bar(
+        ui,
+        response,
+        s,
+        id,
+        &chart,
+        bar_at,
+        &mut state.card_pending,
+        &mut state.show_pose,
+    ));
     if chart.locked {
         return true;
     }
@@ -595,32 +687,120 @@ fn draw_quiet(
     colour: Color32,
     screen: &impl Fn([f32; 2]) -> Pos2,
 ) {
-    let faint = colour.gamma_multiply(0.55);
+    let faint = colour.gamma_multiply(0.5);
     painter.add(egui::Shape::line(
         path_shape(b, screen),
-        EStroke::new(1.25, faint),
+        EStroke::new(1.0, faint),
     ));
+    let ring = EStroke::new(1.0, colour.gamma_multiply(0.75));
     for p in &b.chart.points {
-        painter.circle_filled(screen(p.pos), 2.5, faint);
+        let at = screen(p.pos);
+        match p.role {
+            Role::Key => {
+                painter.circle_stroke(at, 3.0, ring);
+            }
+            Role::Breakdown => {
+                painter.add(egui::Shape::closed_line(triangle(at, 4.0), ring));
+            }
+        }
     }
 }
 
-/// The selected chart in full: path, a tick per frame, points with their
-/// frame numbers, and where it is now.
+/// An upward triangle around `at`, `r` from its centre to each corner.
+fn triangle(at: Pos2, r: f32) -> Vec<Pos2> {
+    vec![
+        at + Vec2::new(0.0, -r),
+        at + Vec2::new(r * 0.866, r * 0.5),
+        at + Vec2::new(-r * 0.866, r * 0.5),
+    ]
+}
+
+/// Text that reads on `fill`: dark on a light colour, white on a dark one.
+fn ink_on(fill: Color32) -> Color32 {
+    let luma =
+        0.299 * f32::from(fill.r()) + 0.587 * f32::from(fill.g()) + 0.114 * f32::from(fill.b());
+    if luma > 150.0 {
+        theme::BG_BASE
+    } else {
+        theme::ON_ACCENT
+    }
+}
+
+/// A chart point as on a paper timing chart, on glass: a key is its frame
+/// number in a circle, a breakdown its number in a triangle. The point on
+/// the current frame is filled with the chart's colour.
+fn point_chip(
+    painter: &egui::Painter,
+    at: Pos2,
+    point: &symphony_core::chart::ChartPoint,
+    colour: Color32,
+    current: bool,
+    hot: bool,
+) {
+    let (fill, ink) = if current {
+        (colour, ink_on(colour))
+    } else {
+        (HUD, theme::TEXT_PRIMARY)
+    };
+    let font = egui::FontId::proportional(10.5);
+    let galley = painter.layout_no_wrap(point.frame.to_string(), font, ink);
+    let grow = if hot { 1.5 } else { 0.0 };
+    let rim = EStroke::new(1.25, colour);
+    let shadow = Color32::from_black_alpha(56);
+    if current {
+        painter.circle_filled(
+            at,
+            galley.size().x / 2.0 + 10.0 + grow,
+            colour.gamma_multiply(0.22),
+        );
+    }
+    match point.role {
+        Role::Key => {
+            let r = (galley.size().x / 2.0 + 4.5).max(8.5) + grow;
+            painter.circle_filled(at + Vec2::new(0.0, 1.5), r + 1.0, shadow);
+            painter.circle_filled(at, r, fill);
+            painter.circle_stroke(at, r - 1.5, EStroke::new(1.0, HUD_RIM));
+            painter.circle_stroke(at, r, rim);
+            painter.galley(at - galley.size() / 2.0, galley, ink);
+        }
+        Role::Breakdown => {
+            let r = (galley.size().x / 2.0 + 6.0).max(11.0) + grow;
+            let shape = triangle(at, r);
+            painter.add(egui::Shape::convex_polygon(
+                triangle(at + Vec2::new(0.0, 1.5), r + 1.0),
+                shadow,
+                EStroke::NONE,
+            ));
+            painter.add(egui::Shape::convex_polygon(shape, fill, rim));
+            let centre = at + Vec2::new(0.0, r * 0.14);
+            painter.galley(centre - galley.size() / 2.0, galley, ink);
+        }
+    }
+}
+
 /// The needle, turn knob and size square of the point on this frame.
 fn draw_pose(painter: &egui::Painter, pose: &Pose, colour: Color32, active: Option<Grab>) {
-    let edge = EStroke::new(3.0, theme::BG_BASE.gamma_multiply(0.6));
-    painter.line_segment([pose.at, pose.knob()], edge);
-    painter.line_segment([pose.at, pose.knob()], EStroke::new(1.0, colour));
+    painter.line_segment(
+        [pose.at, pose.knob()],
+        EStroke::new(1.0, colour.gamma_multiply(0.7)),
+    );
     let hot = |g: Grab| active == Some(g);
-    let r = if hot(Grab::Turn(pose.pid)) { 6.5 } else { 5.0 };
-    painter.circle(pose.knob(), r, Color32::WHITE, EStroke::new(1.5, colour));
+    let r = if hot(Grab::Turn(pose.pid)) { 6.5 } else { 5.5 };
+    painter.circle_filled(
+        pose.knob() + Vec2::new(0.0, 1.0),
+        r + 1.0,
+        Color32::from_black_alpha(56),
+    );
+    painter.circle_filled(pose.knob(), r, HUD);
+    painter.circle_stroke(pose.knob(), r, EStroke::new(1.25, colour));
+    painter.circle_filled(pose.knob(), 1.75, colour);
     let half = if hot(Grab::Size(pose.pid)) { 5.0 } else { 4.0 };
+    let square = egui::Rect::from_center_size(pose.size(), Vec2::splat(half * 2.0));
     painter.rect(
-        egui::Rect::from_center_size(pose.size(), Vec2::splat(half * 2.0)),
-        1.0,
-        colour,
-        EStroke::new(1.5, Color32::WHITE),
+        square,
+        1.5,
+        HUD,
+        EStroke::new(1.25, colour),
         egui::StrokeKind::Inside,
     );
 }
@@ -641,92 +821,58 @@ fn draw_selected(
     } else {
         colour.gamma_multiply(0.45)
     };
+    // A thin line with a soft glow of its own colour: light on the
+    // artwork, readable on dark and light alike.
     let path = path_shape(b, screen);
     painter.add(egui::Shape::line(
         path.clone(),
-        EStroke::new(4.0, theme::BG_BASE.gamma_multiply(0.6)),
+        EStroke::new(7.0, colour.gamma_multiply(0.14)),
     ));
-    painter.add(egui::Shape::line(path, EStroke::new(2.0, colour)));
-    // Spacing: one tick across the path on every frame.
-    // A dark edge under each tick keeps it readable on light artwork.
-    let (edge, tick) = (
-        EStroke::new(3.5, theme::BG_BASE.gamma_multiply(0.6)),
-        EStroke::new(1.5, colour),
-    );
+    painter.add(egui::Shape::line(path, EStroke::new(1.5, colour)));
+    // Spacing: a short tick across the path on every frame, as on paper.
     for mark in &b.marks {
         if b.chart.point_on(mark.frame).is_some() {
             continue;
         }
         let p = screen(mark.pos);
         let n = normal(screen, mark);
-        let long = if active == Some(Grab::Tick(mark.frame)) {
-            8.0
+        let (long, width) = if active == Some(Grab::Tick(mark.frame)) {
+            (7.0, 2.0)
         } else {
-            5.0
+            (4.0, 1.25)
         };
-        painter.line_segment([p - n * (long + 1.0), p + n * (long + 1.0)], edge);
-        painter.line_segment([p - n * long, p + n * long], tick);
+        painter.line_segment([p - n * long, p + n * long], EStroke::new(width, colour));
     }
-    // The current point's handles: a line out to a small square.
+    // The current point's handles: a line out to a small glass dot.
     for &(pid, after, from, to) in handles {
         let (a, h) = (screen(from), screen(to));
-        painter.line_segment(
-            [a, h],
-            EStroke::new(1.0, theme::TEXT_PRIMARY.gamma_multiply(0.8)),
-        );
-        let size = if active == Some(Grab::Handle(pid, after)) {
-            9.0
+        painter.line_segment([a, h], EStroke::new(1.0, colour.gamma_multiply(0.6)));
+        let r = if active == Some(Grab::Handle(pid, after)) {
+            4.5
         } else {
-            7.0
+            3.5
         };
-        let r = egui::Rect::from_center_size(h, Vec2::splat(size));
-        painter.rect_filled(r.expand(1.0), 1.0, theme::BG_BASE);
-        painter.rect_filled(r, 1.0, theme::TEXT_PRIMARY);
+        painter.circle_filled(h, r, Color32::WHITE);
+        painter.circle_stroke(h, r, EStroke::new(1.25, colour));
+    }
+    // Now, between points: an amber ring (amber is time, as on the
+    // Timeline) with a soft glow.
+    if b.chart.point_on(frame).is_none() {
+        if let Some(mark) = b.mark(frame) {
+            let p = screen(mark.pos);
+            painter.circle_filled(p, 10.0, theme::ACCENT_TIME.gamma_multiply(0.18));
+            painter.circle_stroke(p, 6.5, EStroke::new(2.0, theme::ACCENT_TIME));
+        }
     }
     for point in &b.chart.points {
-        let p = screen(point.pos);
-        let big = active == Some(Grab::Point(point.id));
-        let r = if big { 6.5 } else { 5.0 };
-        painter.circle_filled(p, r + 1.5, theme::BG_BASE);
-        match point.role {
-            Role::Key => {
-                painter.circle_filled(p, r, colour);
-            }
-            Role::Breakdown => {
-                painter.circle_stroke(p, r - 1.0, EStroke::new(2.0, colour));
-            }
-        }
-        // The frame number on a small dark tag, readable on any artwork.
-        let galley =
-            painter.layout_no_wrap(point.frame.to_string(), theme::dense(), theme::TEXT_PRIMARY);
-        let tag = egui::Rect::from_min_size(
-            p + Vec2::new(8.0, -8.0 - galley.size().y - 2.0),
-            galley.size() + Vec2::new(8.0, 2.0),
+        point_chip(
+            painter,
+            screen(point.pos),
+            point,
+            colour,
+            point.frame == frame,
+            active == Some(Grab::Point(point.id)),
         );
-        painter.rect_filled(tag, 4.0, theme::BG_BASE.gamma_multiply(0.85));
-        painter.galley(tag.min + Vec2::new(4.0, 1.0), galley, theme::TEXT_PRIMARY);
-    }
-    // Now: amber, as the current frame is on the Timeline, with an arrow
-    // the way it's going.
-    if let Some(mark) = b.mark(frame) {
-        let p = screen(mark.pos);
-        let now = EStroke::new(2.0, theme::ACCENT_TIME);
-        painter.circle_stroke(p, 9.0, now);
-        let n = normal(screen, mark);
-        let d = Vec2::new(n.y, -n.x);
-        if b.marks.len() > 1 {
-            let tip = p + d * 20.0;
-            painter.line_segment([p + d * 9.0, tip], now);
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    tip + d * 2.0,
-                    tip - d * 6.0 + n * 4.5,
-                    tip - d * 6.0 - n * 4.5,
-                ],
-                theme::ACCENT_TIME,
-                EStroke::NONE,
-            ));
-        }
     }
 }
 
@@ -743,121 +889,255 @@ fn normal(screen: &impl Fn([f32; 2]) -> Pos2, mark: &Mark) -> Vec2 {
     Vec2::new(-d.y, d.x)
 }
 
-/// What a click does now, the point on this frame's settings, and a way
-/// out: a small card at the canvas corner, so the chart is edited on the
-/// canvas with no panel to open.
-fn card(
+/// The point bar: a small glass pill under the point on this frame (or
+/// where the chart is now) with what an animator reaches for most, and
+/// the rest behind More. The full set is in Node Properties too.
+#[allow(clippy::too_many_arguments)]
+fn bar(
     ui: &egui::Ui,
     response: &egui::Response,
     s: &mut Session,
     id: NodeId,
     chart: &Chart,
+    place: Option<(Pos2, egui::Align2)>,
     pending: &mut bool,
-) {
-    let at = response.rect.left_top() + Vec2::new(12.0, 12.0);
+    show_pose: &mut bool,
+) -> Vec2 {
     let here = chart.point_on(s.frame).map(|p| p.id);
-    let text = if chart.locked {
-        "This chart is locked. Unlock it in its properties to edit it.".to_owned()
-    } else if chart.points.is_empty() {
-        format!(
-            "Click where the artwork is on frame {} to start the chart.",
-            s.frame
-        )
-    } else if here.is_some() {
-        "Alt-drag a handle for a sharp turn; Alt-click removes the point.".to_owned()
-    } else {
-        format!(
-            "Click to place the chart on frame {}. Slide a tick along the path \
-             to change the spacing.",
-            s.frame
-        )
-    };
-    egui::Area::new(egui::Id::unique("smart-chart-card"))
+    let (pos, pivot) = place.unwrap_or((
+        response.rect.center_bottom() - Vec2::new(0.0, 14.0),
+        egui::Align2::CENTER_BOTTOM,
+    ));
+    let frame = egui::Frame::new()
+        .fill(HUD)
+        .stroke(EStroke::new(1.0, HUD_RIM))
+        .corner_radius(14)
+        .inner_margin(egui::Margin::symmetric(8, 4))
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 4],
+            blur: 14,
+            spread: 0,
+            color: Color32::from_black_alpha(70),
+        });
+    let shown = egui::Area::new(egui::Id::unique("smart-chart-bar"))
         .order(egui::Order::Foreground)
-        .fixed_pos(at)
+        .pivot(pivot)
+        .fixed_pos(pos)
+        .constrain_to(response.rect.shrink(8.0))
         .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(236.0);
-                ui.spacing_mut().slider_width = 96.0;
-                ui.label(
-                    egui::RichText::new(text)
-                        .font(theme::dense())
-                        .color(theme::TEXT_SECONDARY),
-                );
-                if let (Some(pid), false) = (here, chart.locked) {
-                    ui.separator();
+            frame.show(ui, |ui| {
+                // Glass-lite controls: a faint light fill, so each one
+                // reads as something to press, on or off.
+                let control = Color32::from_white_alpha(20);
+                let w = &mut ui.visuals_mut().widgets;
+                w.inactive.weak_bg_fill = control;
+                w.inactive.bg_fill = control;
+                w.inactive.corner_radius = 7.into();
+                w.hovered.corner_radius = 7.into();
+                w.active.corner_radius = 7.into();
+                ui.spacing_mut().button_padding = Vec2::new(8.0, 3.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
                     let mut draft = chart.clone();
-                    point_controls(ui, &mut draft, pid);
-                    if draft != *chart {
-                        edit(
-                            s,
-                            id,
-                            "Change chart point",
-                            Some(format!("chart-card-{}-{}", id.0, pid.0)),
-                            |c| *c = draft,
+                    if chart.locked {
+                        hint(ui, "Locked");
+                        if ui.small_button("Unlock").clicked() {
+                            draft.locked = false;
+                        }
+                    } else if let Some(pid) = here {
+                        bar_controls(ui, &mut draft, pid, show_pose);
+                    } else if chart.points.is_empty() {
+                        hint(
+                            ui,
+                            &format!("Click the artwork to start on frame {}", s.frame),
                         );
+                    } else {
+                        hint(ui, &format!("Click to place frame {}", s.frame));
+                    }
+                    let mut done = false;
+                    ui.menu_button("More", |ui| {
+                        more_menu(ui, s, id, &mut draft, here, &mut done);
+                    });
+                    if draft != *chart {
+                        let key = here.map_or_else(
+                            || format!("chart-bar-{}", id.0),
+                            |pid| format!("chart-card-{}-{}", id.0, pid.0),
+                        );
+                        edit(s, id, "Change chart point", Some(key), |c| *c = draft);
                         *pending = true;
                     }
-                }
-                // A slider drag is one step; each click is its own.
-                if *pending && !ui.input(|i| i.pointer.any_down()) {
-                    s.end_gesture();
-                    *pending = false;
-                }
-                // What this chart drives: the layer it's being drawn for.
-                if s.layer_peg(s.selected).is_some() {
-                    let name = s
-                        .doc
-                        .column(s.selected)
-                        .map_or_else(String::new, |c| c.name.clone());
-                    let mut follows = s.layer_chart(s.selected) == Some(id);
-                    if widgets::checkbox(ui, &mut follows, &format!("{name} follows this chart"))
-                        .on_hover_text("The layer's peg moves along the chart.")
-                        .changed()
-                    {
-                        s.set_layer_chart(s.selected, follows.then_some(id));
-                    }
-                }
-                ui.horizontal(|ui| {
-                    if widgets::primary_button(ui, "Done", true).clicked() {
+                    if done {
                         // Back to the layer: the chart stays, quietly.
                         s.selected_node = s.doc.layers.get(s.selected).map(|l| l.node);
-                    }
-                    if let (Some(pid), false) = (here, chart.locked) {
-                        let spaced =
-                            chart
-                                .points
-                                .iter()
-                                .position(|p| p.id == pid)
-                                .is_some_and(|i| {
-                                    [i.checked_sub(1), Some(i)]
-                                        .into_iter()
-                                        .flatten()
-                                        .filter_map(|j| chart.points.get(j))
-                                        .any(|p| {
-                                            !p.timing.spacing.is_empty()
-                                                || p.timing.ease_in > 0.0
-                                                || p.timing.ease_out > 0.0
-                                        })
-                                });
-                        if ui
-                            .add_enabled(spaced, egui::Button::new("Even spacing"))
-                            .on_hover_text(
-                                "Clear the eases and slid ticks on both sides of this point.",
-                            )
-                            .clicked()
-                        {
-                            edit(s, id, "Even spacing", None, |c| c.even_spacing(pid));
-                        }
                     }
                 });
             });
         });
+    // A value drag is one step; each click is its own.
+    if *pending && !ui.input(|i| i.pointer.any_down()) {
+        s.end_gesture();
+        *pending = false;
+    }
+    shown.response.rect.size()
+}
+
+fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .font(theme::dense())
+            .color(theme::TEXT_SECONDARY),
+    );
+}
+
+/// The bar's everyday controls for the point `pid`.
+fn bar_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId, show_pose: &mut bool) {
+    let Some(i) = c.points.iter().position(|p| p.id == pid) else {
+        return;
+    };
+    let (has_prev, next) = (i > 0, c.points.get(i + 1).map(|p| p.frame));
+    let mut role = c.points[i].role;
+    if widgets::segmented(
+        ui,
+        "chart-bar-role",
+        &mut role,
+        &[(Role::Key, "Key"), (Role::Breakdown, "Breakdown")],
+        false,
+    ) {
+        c.points[i].role = role;
+    }
+    let ease = |ui: &mut egui::Ui, label: &str, value: &mut f32, tip: &str| {
+        let mut p = (*value * 100.0).round();
+        if ui
+            .add(
+                egui::DragValue::new(&mut p)
+                    .range(0.0..=100.0)
+                    .speed(1.0)
+                    .prefix(label)
+                    .suffix("%"),
+            )
+            .on_hover_text(tip)
+            .changed()
+        {
+            *value = p / 100.0;
+        }
+    };
+    if has_prev {
+        ease(
+            ui,
+            "In ",
+            &mut c.points[i - 1].timing.ease_in,
+            "Slow in: frames bunch up arriving here.",
+        );
+    }
+    if let Some(next) = next {
+        ease(
+            ui,
+            "Out ",
+            &mut c.points[i].timing.ease_out,
+            "Slow out: frames bunch up leaving here.",
+        );
+        let p = &mut c.points[i];
+        if ui
+            .add(egui::Button::new("Hold").selected(p.timing.hold))
+            .on_hover_text(format!("Stay here until frame {next}, then jump."))
+            .clicked()
+        {
+            p.timing.hold = !p.timing.hold;
+        }
+        let straight = p.path == PathKind::Line;
+        if ui
+            .add(egui::Button::new("Line").selected(straight))
+            .on_hover_text(format!("A straight line to frame {next}."))
+            .clicked()
+        {
+            p.path = if straight {
+                PathKind::Curve
+            } else {
+                PathKind::Line
+            };
+        }
+    }
+    if symphony_ui::icons::button(
+        ui,
+        symphony_ui::icons::Icon::RotateRight,
+        *show_pose,
+        true,
+        "Rotate and scale on this frame",
+    )
+    .clicked()
+    {
+        *show_pose = !*show_pose;
+    }
+}
+
+/// Everything else: the point's shape and exact rotation and scale, even
+/// spacing, what the chart drives, and Done.
+fn more_menu(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    id: NodeId,
+    c: &mut Chart,
+    here: Option<PointId>,
+    done: &mut bool,
+) {
+    ui.set_min_width(220.0);
+    if let (Some(pid), false) = (here, c.locked) {
+        point_controls(ui, c, pid);
+        let spaced = c.points.iter().position(|p| p.id == pid).is_some_and(|i| {
+            [i.checked_sub(1), Some(i)]
+                .into_iter()
+                .flatten()
+                .filter_map(|j| c.points.get(j))
+                .any(|p| {
+                    !p.timing.spacing.is_empty()
+                        || p.timing.ease_in > 0.0
+                        || p.timing.ease_out > 0.0
+                })
+        });
+        if ui
+            .add_enabled(spaced, egui::Button::new("Even spacing"))
+            .on_hover_text("Clear the eases and slid ticks on both sides of this point.")
+            .clicked()
+        {
+            c.even_spacing(pid);
+        }
+        ui.separator();
+    }
+    follow_toggle(ui, s, id);
+    hint(
+        ui,
+        "Alt-drag a handle for a sharp turn. Alt-click removes a point.",
+    );
+    if widgets::primary_button(ui, "Done", true)
+        .on_hover_text("Back to the layer (Esc). The chart stays.")
+        .clicked()
+    {
+        *done = true;
+        ui.close();
+    }
+}
+
+/// "<layer> follows this chart": the selected layer's peg on the chart.
+pub fn follow_toggle(ui: &mut egui::Ui, s: &mut Session, id: NodeId) {
+    if s.layer_peg(s.selected).is_none() {
+        return;
+    }
+    let name = s
+        .doc
+        .column(s.selected)
+        .map_or_else(String::new, |c| c.name.clone());
+    let mut follows = s.layer_chart(s.selected) == Some(id);
+    if widgets::checkbox(ui, &mut follows, &format!("{name} follows this chart"))
+        .on_hover_text("The layer's peg moves along the chart.")
+        .changed()
+    {
+        s.set_layer_chart(s.selected, follows.then_some(id));
+    }
 }
 
 /// The point `pid`'s settings: key or breakdown, its shape, the eases
 /// into and out of it, and what the segment after it does.
-fn point_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId) {
+pub fn point_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId) {
     let Some(i) = c.points.iter().position(|p| p.id == pid) else {
         return;
     };

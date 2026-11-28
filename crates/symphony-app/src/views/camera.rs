@@ -58,7 +58,7 @@ pub struct CanvasState {
     /// The selected Mesh Warp's grid, being edited.
     warp_edit: super::warp_edit::WarpEdit,
     /// Smart Charts drawn over Camera, and the selected one being edited.
-    chart_edit: super::chart_edit::ChartEdit,
+    pub(crate) chart_edit: super::chart_edit::ChartEdit,
     rig_edit: super::rig_edit::RigEdit,
     /// Text being typed with the Text tool.
     text: Option<TextDraft>,

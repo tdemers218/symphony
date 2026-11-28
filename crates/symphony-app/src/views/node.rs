@@ -2296,7 +2296,7 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
                     .suffix("°"),
             );
         }
-        NodeKind::Chart(chart) => chart_form(ui, chart, draft.id),
+        NodeKind::Chart(chart) => chart_form(ui, s, chart, draft.id),
         _ => {}
     }
     // Pegs apply live, so the drawing moves as you drag a value: their
@@ -2425,7 +2425,12 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
 
 /// A Smart Chart's own properties: how it shows, and what's on it. The
 /// points themselves are edited on the canvas.
-fn chart_form(ui: &mut egui::Ui, chart: &mut symphony_core::chart::Chart, id: NodeId) {
+fn chart_form(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    chart: &mut symphony_core::chart::Chart,
+    id: NodeId,
+) {
     use symphony_core::chart::Role;
     property_heading(ui, "Smart Chart");
     property_row(ui, "Colour", |ui| {
@@ -2454,14 +2459,22 @@ fn chart_form(ui: &mut egui::Ui, chart: &mut symphony_core::chart::Chart, id: No
         None => "No points yet".to_owned(),
     };
     ui.label(summary);
-    ui.label(
-        egui::RichText::new(
-            "With the Transform tool, click the canvas to place the chart on the \
-             current frame; drag a point to move it.",
-        )
-        .font(theme::dense())
-        .color(theme::TEXT_SECONDARY),
-    );
+    super::chart_edit::follow_toggle(ui, s, id);
+    // The point on this frame, with every setting the canvas bar has.
+    if let Some(pid) = chart.point_on(s.frame).map(|p| p.id) {
+        ui.add_space(8.0);
+        property_heading(ui, &format!("Point on frame {}", s.frame));
+        super::chart_edit::point_controls(ui, chart, pid);
+    } else {
+        ui.label(
+            egui::RichText::new(
+                "With the Transform tool, click the canvas to place the chart on the \
+                 current frame; drag a point to move it.",
+            )
+            .font(theme::dense())
+            .color(theme::TEXT_SECONDARY),
+        );
+    }
 }
 
 fn apply_name(s: &mut Session, draft: &mut PropertyDraft) {

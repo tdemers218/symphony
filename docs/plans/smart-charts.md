@@ -101,6 +101,14 @@ Timing { hold, ease_out, ease_in, spacing: Vec<[t, s]> }
 
 In-betweening, lighting, texture tracking and motion-processing nodes ([15]–[17]) come after; the Motion output is designed so they can consume or transform it.
 
+## Look (v2, Tristan's direction, 2026-11-28)
+
+A paper timing chart in a glass-lite finish:
+- **Path and points:** a thin line with a soft glow of its own colour, and short ticks. A key is its frame number in a small glass circle; a breakdown is a glass triangle. The point on the current frame is filled with the chart's colour, and between points the current frame is an amber ring.
+- **Only what's being worked on shows.** Curve handles appear when the pointer nears the point (or it has handles of its own). The rotate and scale needle shows only when switched on from the bar.
+- **Controls:** a glass pill bar next to the point, placed where it hides least of the chart (above, below, or beside the point), with More for the rest. The same settings are in Node Properties. Esc finishes editing.
+- **Colours:** calm, mid-dark hues that read on the stage and on artwork, away from the interface's own meanings (selection blue, time amber, danger red).
+
 ## Performance ([18])
 
 - A built curve is cached per (chart node, scene version). An edit to one chart rebuilds that chart only.

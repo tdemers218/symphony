@@ -153,17 +153,19 @@ A Smart Chart is an animator's timing chart that moves artwork. Search
   tick for every frame between them: close ticks are slow, far apart
   ones fast. A point between two keys is a **breakdown** (drawn as a
   ring).
-- **Shape and time it.** Drag a point to move it. On a point's frame,
-  its white handles bend the path (Alt-drag for a sharp turn) and the
-  card in the corner has Key / Breakdown, Smooth / Corner / Handles,
-  **Slow in**, **Slow out**, **Hold** and **Straight**. Slide any tick
-  along the path to change where the chart is on that frame. **Even
-  spacing** clears the eases and slid ticks around the point.
-- **Turn and scale.** On a point's frame, drag the round knob on the
-  needle to turn (Shift snaps 15°) and the square along it to scale.
-  The card has exact Rotation and Scale fields: 720° is two full turns.
-- **Make artwork follow it.** Tick **<layer> follows this chart** on
-  the card, or search **Follow Smart Chart**. The layer's peg then
+- **Shape and time it.** Drag a point to move it. On a point's frame, a
+  small bar appears next to it: Key / Breakdown, **In** and **Out**
+  (slow in, slow out), **Hold** and **Line** (a straight segment).
+  **More** has Smooth / Corner / Handles, **Even spacing** (clears the
+  eases and slid ticks around the point) and **Done** (or press Esc).
+  Bring the pointer near the point to see its curve handles (Alt-drag
+  for a sharp turn). Slide any tick along the path to change where the
+  chart is on that frame. Node Properties has the same settings.
+- **Turn and scale.** Click the rotate button on the bar: drag the round
+  knob on the needle to turn (Shift snaps 15°) and the square along it to
+  scale. **More** has exact Rotation and Scale: 720° is two full turns.
+- **Make artwork follow it.** Tick **<layer> follows this chart** under
+  **More** or in Node Properties, or search **Follow Smart Chart**. The layer's peg then
   moves along the chart; on the chart's first frame the artwork stays
   where you drew it. Rotation and Scale can be turned off in the peg's
   properties. In Node view, a chart connects to a peg's diamond
@@ -175,8 +177,8 @@ A Smart Chart is an animator's timing chart that moves artwork. Search
   between points takes where the chart is.
 
 Charts show in Camera and Drawing view and never appear in exports.
-Click **Done** on the card to go back to your layer; the chart stays,
-drawn quietly.
+Press Esc (or **More → Done**) to go back to your layer; the chart
+stays, drawn quietly.
 
 ## Timeline keys and frames
 

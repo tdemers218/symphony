@@ -2724,6 +2724,8 @@ fn a_smart_chart_is_placed_and_dragged_on_the_canvas() {
     // On frame 9, turn the knob to point down the stage's +y axis (90°),
     // then pull the size square out to twice its length (200%).
     h.state_mut().s.frame = 9;
+    // The needle shows once switched on (the bar's rotate button).
+    h.state_mut().canvas.chart_edit.show_pose = true;
     h.run_steps(2);
     let drag = |h: &mut Harness<'static, Rig>, start: egui::Pos2, end: egui::Pos2| {
         h.input_mut()
