@@ -6,17 +6,24 @@ swatch and everything painted with it changes, in every drawing.
 
 ## The palette
 
-The **Colour** view shows the scene's swatches.
+The **Colour** view shows the scene's swatches, as a **List** (a chip and
+a name per colour) or as **Swatches** (a grid of squares, the name when you
+hover). The switch is at the top right of the view, and Symphony remembers
+your choice.
 
-- Click a colour's name to make it the current colour. Double-click the
-  name to rename it.
-- Click the colour chip to open the picker, **Square** or **Triangle**,
-  with **Opacity**. Changes apply as you make them.
+- In the list, click a row to make that colour the current colour.
+  Double-click its name to rename it. Click the chip to open the picker,
+  **Square** or **Triangle**, with **Opacity**.
+- In the grid, click a square to make it the current colour, and
+  double-click it to open the picker. The current colour has a ring
+  around it.
+- Changes in the picker apply as you make them. A see-through colour
+  shows a checkerboard behind it, so a 40% swatch looks 40%.
 - The **+** and **−** buttons add a colour and remove the current one.
   Removing a colour that's in use asks which colour its strokes and fills
   should take instead.
-- Right-click a name to **Rename** it, **Move up** or **Move down**, or
-  **Protect Colour**. A red bar marks a protected colour.
+- Right-click a colour to **Rename** it, **Move up** or **Move down**,
+  or **Protect Colour**. A red bar marks a protected colour.
 - A swatch's **Opacity** is its maximum coverage. A pressure-sensitive
   brush's opacity multiplies it.
 

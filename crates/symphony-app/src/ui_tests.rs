@@ -4,6 +4,7 @@
 //! each part can't see.
 
 use eframe::egui::{self, Pos2, Vec2};
+use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use symphony_core::stroke::{ArtLayer, StrokeKind};
 use symphony_pen::{PenSample, Phase, Tool as PenTool};
@@ -2893,4 +2894,40 @@ fn a_smart_chart_is_placed_and_dragged_on_the_canvas() {
         2,
         "turning and scaling add no point"
     );
+}
+
+/// The Colour view on its own, in List or Swatch mode.
+fn colour_view(tiles: bool) -> Harness<'static, Session> {
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(400.0, 400.0))
+        .build_ui_state(
+            move |ui, s: &mut Session| {
+                ui.data_mut(|d| {
+                    d.insert_persisted(egui::Id::unique("colour-view-swatch-mode"), tiles)
+                });
+                crate::views::panels::colour(ui, s);
+            },
+            Session::new_scene(),
+        );
+    h.run_steps(2);
+    h
+}
+
+#[test]
+fn a_colour_row_or_tile_picks_its_swatch_for_drawing() {
+    for tiles in [false, true] {
+        let mut h = colour_view(tiles);
+        let shirt = h
+            .state()
+            .doc
+            .palette
+            .swatches
+            .iter()
+            .find(|sw| sw.name == "Shirt")
+            .expect("demo palette has Shirt")
+            .id;
+        h.get_by_label("Shirt").click();
+        h.run_steps(2);
+        assert_eq!(h.state().swatch, shirt, "tiles: {tiles}");
+    }
 }

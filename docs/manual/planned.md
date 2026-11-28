@@ -21,6 +21,29 @@ The long-term goal is everything Harmony does, plus the additions below.
 - **Pixel brushes** as a separate brush category.
 - **3D rotation of a selection**, separate from its peg.
 
+## Colour
+
+The full plan is in [the colour system plan](../plans/colour-system.md).
+Static colours stay the default; everything below is optional.
+
+- **A perceptual picker** (OKLCH), so changing a colour's lightness
+  doesn't change how saturated it looks. The current Square and Triangle
+  pickers stay.
+- **A preview of the result**: how the colour will look over what's
+  under it, with the layer's blend mode and opacity.
+- **Dynamic swatches**: a swatch that varies a little on its own
+  (**Natural variation**), or changes with pressure, direction, tilt or
+  speed, or blends several colours. The same stroke always gets the same
+  colours, so reopening a scene, undoing or rendering never changes them.
+- **Shadow and highlight suggestions** for the current colour, and a
+  **target colour**: pick the result you want and get the colour to
+  paint with for the current blend mode.
+- **Colour Lab**: a separate view to try colours under a light on a
+  sphere, cube, cloth or your own artwork, and save the ramp to the
+  palette.
+- **Linked palettes**: a skin colour whose shadow and highlight follow
+  it when you change it, and day, sunset and night versions of a palette.
+
 ## Timing
 
 - **Sound scrubbing**: hear the sound as you drag the playhead, then

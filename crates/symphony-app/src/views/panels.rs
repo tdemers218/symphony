@@ -1148,6 +1148,10 @@ pub fn colour(ui: &mut egui::Ui, s: &mut Session) {
         let state = ui.scope_id().with(("colour-edit", &s.key));
         let rename = state.with("rename");
         let removal = state.with("remove");
+        // Harmony's List and Swatch modes (Colours > Swatch Mode), kept
+        // between sessions.
+        let mode = egui::Id::unique("colour-view-swatch-mode");
+        let mut tiles = ui.data_mut(|d| *d.get_persisted_mut_or_default::<bool>(mode));
         ui.horizontal(|ui| {
             if icons::button(ui, Icon::Plus, false, true, "Add colour").clicked() {
                 s.add_swatch();
@@ -1160,82 +1164,28 @@ pub fn colour(ui: &mut egui::Ui, s: &mut Session) {
                 }
             }
             ui.label(&s.doc.palette.name);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Right to left, so listed last to first.
+                widgets::segmented(
+                    ui,
+                    "colour-mode",
+                    &mut tiles,
+                    &[(true, "Swatches"), (false, "List")],
+                    false,
+                );
+            });
         });
+        ui.data_mut(|d| d.insert_persisted(mode, tiles));
         let swatches = s.doc.palette.swatches.clone();
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for (index, sw) in swatches.iter().enumerate() {
-                ui.push_id(sw.id.0, |ui| {
-                    ui.horizontal(|ui| {
-                        // Harmony marks a protected colour with a red bar
-                        // beside it. The space is kept so rows line up.
-                        let (bar, _) = ui.allocate_exact_size(
-                            egui::vec2(3.0, ui.spacing().interact_size.y),
-                            egui::Sense::hover(),
-                        );
-                        if sw.protected {
-                            ui.painter().rect_filled(bar, 1.0, theme::STATE_DANGER);
-                            ui.interact(bar, ui.scope_id().with("protected"), egui::Sense::hover())
-                                .on_hover_text("Protected colour");
-                        }
-                        let mut rgba = sw.rgba();
-                        let chip = super::colour_picker::swatch(ui, &mut rgba);
-                        if chip.clicked() || chip.changed() {
-                            s.swatch = sw.id;
-                        }
-                        if chip.changed() {
-                            s.set_swatch(sw.id, rgba);
-                        }
-                        let draft = ui.data(|d| d.get_temp::<(Id, String)>(rename));
-                        if let Some((id, mut text)) = draft.filter(|(id, _)| *id == sw.id) {
-                            let edit = ui.text_edit_singleline(&mut text);
-                            if !edit.has_focus() && !edit.lost_focus() {
-                                edit.request_focus();
-                            }
-                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                ui.data_mut(|d| d.remove::<(Id, String)>(rename));
-                            } else if edit.lost_focus() {
-                                s.rename_swatch(id, &text);
-                                ui.data_mut(|d| d.remove::<(Id, String)>(rename));
-                            } else {
-                                ui.data_mut(|d| d.insert_temp(rename, (id, text)));
-                            }
-                        } else {
-                            let row = ui.selectable_label(s.swatch == sw.id, &sw.name);
-                            if row.clicked() {
-                                s.swatch = sw.id;
-                            }
-                            if row.double_clicked() {
-                                ui.data_mut(|d| d.insert_temp(rename, (sw.id, sw.name.clone())));
-                            }
-                            row.context_menu(|ui| {
-                                if ui.button("Rename").clicked() {
-                                    ui.data_mut(|d| {
-                                        d.insert_temp(rename, (sw.id, sw.name.clone()))
-                                    });
-                                    ui.close();
-                                }
-                                let protect = if sw.protected {
-                                    "Unprotect Colour"
-                                } else {
-                                    "Protect Colour"
-                                };
-                                if ui.button(protect).clicked() {
-                                    s.toggle_protect_swatch(sw.id);
-                                    ui.close();
-                                }
-                                for (label, delta, enabled) in [
-                                    ("Move up", -1, index > 0),
-                                    ("Move down", 1, index + 1 < swatches.len()),
-                                ] {
-                                    if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
-                                        s.move_swatch(sw.id, delta);
-                                        ui.close();
-                                    }
-                                }
-                            });
-                        }
-                    })
-                });
+            if tiles {
+                swatch_tiles(ui, s, &swatches, rename);
+            } else {
+                for (index, sw) in swatches.iter().enumerate() {
+                    ui.push_id(sw.id.0, |ui| {
+                        swatch_row(ui, s, sw, index, swatches.len(), rename)
+                    });
+                }
             }
         });
         let pending = ui.data(|d| d.get_temp::<(Id, Id)>(removal));
@@ -1265,6 +1215,234 @@ pub fn colour(ui: &mut egui::Ui, s: &mut Session) {
                     });
                 });
             }
+        }
+    });
+}
+
+/// Space between a swatch and the row or tile around it.
+const SWATCH_INSET: u8 = 4;
+
+/// Rename, protect and reorder: the same menu in both modes.
+fn swatch_menu(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    sw: &symphony_core::palette::Swatch,
+    index: usize,
+    count: usize,
+    rename: egui::Id,
+) {
+    if ui.button("Rename").clicked() {
+        ui.data_mut(|d| d.insert_temp(rename, (sw.id, sw.name.clone())));
+        ui.close();
+    }
+    let protect = if sw.protected {
+        "Unprotect Colour"
+    } else {
+        "Protect Colour"
+    };
+    if ui.button(protect).clicked() {
+        s.toggle_protect_swatch(sw.id);
+        ui.close();
+    }
+    for (label, delta, enabled) in [
+        ("Move up", -1, index > 0),
+        ("Move down", 1, index + 1 < count),
+    ] {
+        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            s.move_swatch(sw.id, delta);
+            ui.close();
+        }
+    }
+}
+
+/// The name being typed for `sw`, in `rect`. Returns false when `sw` isn't
+/// being renamed.
+fn rename_field(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    sw: &symphony_core::palette::Swatch,
+    rename: egui::Id,
+    rect: egui::Rect,
+) -> bool {
+    let draft = ui.data(|d| d.get_temp::<(Id, String)>(rename));
+    let Some((id, mut text)) = draft.filter(|(id, _)| *id == sw.id) else {
+        return false;
+    };
+    let edit = ui.put(rect, egui::TextEdit::singleline(&mut text));
+    if !edit.has_focus() && !edit.lost_focus() {
+        edit.request_focus();
+    }
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.data_mut(|d| d.remove::<(Id, String)>(rename));
+    } else if edit.lost_focus() {
+        s.rename_swatch(id, &text);
+        ui.data_mut(|d| d.remove::<(Id, String)>(rename));
+    } else {
+        ui.data_mut(|d| d.insert_temp(rename, (id, text)));
+    }
+    true
+}
+
+/// List mode: one row per colour. The whole row selects the colour for
+/// drawing; the chip opens its editor.
+fn swatch_row(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    sw: &symphony_core::palette::Swatch,
+    index: usize,
+    count: usize,
+    rename: egui::Id,
+) {
+    use super::colour_picker::{self as picker, CHIP, CHIP_RADIUS};
+    let inset = f32::from(SWATCH_INSET);
+    let (rect, row) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), CHIP + 2.0 * inset),
+        egui::Sense::click(),
+    );
+    let selected = s.swatch == sw.id;
+    row.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &sw.name));
+    let radius = theme::around(CHIP_RADIUS, SWATCH_INSET);
+    if selected {
+        ui.painter()
+            .rect_filled(rect, radius, ui.visuals().selection.bg_fill);
+    } else if row.hovered() {
+        ui.painter()
+            .rect_filled(rect, radius, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    let chip_rect =
+        egui::Rect::from_min_size(rect.min + egui::vec2(inset, inset), egui::vec2(CHIP, CHIP));
+    picker::paint_chip(ui, chip_rect, sw.rgba(), CHIP_RADIUS);
+    let mut chip = ui
+        .interact(chip_rect, ui.scope_id().with("chip"), egui::Sense::click())
+        .on_hover_text(format!("Edit colour · {}", picker::opacity_tip(sw.opacity)));
+    let mut rgba = sw.rgba();
+    let toggle = chip.clicked().then_some(egui::SetOpenCommand::Toggle);
+    picker::editor(&mut chip, &mut rgba, true, toggle);
+    if chip.clicked() || chip.changed() || row.clicked() {
+        s.swatch = sw.id;
+    }
+    if chip.changed() {
+        s.set_swatch(sw.id, rgba);
+    }
+    // Harmony marks a protected colour with a red bar beside it.
+    let mut name_right = rect.right() - inset;
+    if sw.protected {
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - inset - 3.0, chip_rect.top()),
+            egui::vec2(3.0, CHIP),
+        );
+        ui.painter().rect_filled(bar, 1.0, theme::STATE_DANGER);
+        ui.interact(bar, ui.scope_id().with("protected"), egui::Sense::hover())
+            .on_hover_text("Protected colour");
+        name_right = bar.left() - inset;
+    }
+    let name_rect = egui::Rect::from_min_max(
+        egui::pos2(chip_rect.right() + 2.0 * inset, rect.top()),
+        egui::pos2(name_right, rect.bottom()),
+    );
+    if rename_field(ui, s, sw, rename, name_rect.shrink2(egui::vec2(0.0, 2.0))) {
+        return;
+    }
+    let text = if selected {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().text_color()
+    };
+    let galley = ui.painter().layout(
+        sw.name.clone(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        text,
+        name_rect.width().max(0.0),
+    );
+    let at = egui::pos2(
+        name_rect.left(),
+        name_rect.center().y - galley.size().y / 2.0,
+    );
+    ui.painter()
+        .with_clip_rect(name_rect)
+        .galley(at, galley, text);
+    if row.double_clicked() {
+        ui.data_mut(|d| d.insert_temp(rename, (sw.id, sw.name.clone())));
+    }
+    row.context_menu(|ui| swatch_menu(ui, s, sw, index, count, rename));
+}
+
+/// Swatch mode: the colours as a grid of squares, the name on hover.
+/// Click picks a colour, double-click edits it.
+fn swatch_tiles(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    swatches: &[symphony_core::palette::Swatch],
+    rename: egui::Id,
+) {
+    use super::colour_picker as picker;
+    // Tool-button sized, with their corners.
+    const TILE: f32 = theme::TOOL_BUTTON;
+    const RADIUS: u8 = theme::GLASS_CONTROL_RADIUS;
+    const RING_GAP: u8 = 2;
+    let gap = f32::from(SWATCH_INSET);
+    ui.add_space(f32::from(RING_GAP) + 1.5);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(gap + 1.5, gap + 1.5);
+        ui.add_space(f32::from(RING_GAP) + 1.5);
+        for (index, sw) in swatches.iter().enumerate() {
+            ui.push_id(sw.id.0, |ui| {
+                let (rect, tile) =
+                    ui.allocate_exact_size(egui::vec2(TILE, TILE), egui::Sense::click());
+                tile.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::Role::Button,
+                        true,
+                        s.swatch == sw.id,
+                        &sw.name,
+                    )
+                });
+                picker::paint_chip(ui, rect, sw.rgba(), RADIUS);
+                if s.swatch == sw.id {
+                    picker::paint_ring(ui, rect, RADIUS, RING_GAP);
+                } else if tile.hovered() {
+                    ui.painter().rect_stroke(
+                        rect.expand(f32::from(RING_GAP)),
+                        theme::around(RADIUS, RING_GAP),
+                        egui::Stroke::new(1.0, ui.visuals().widgets.hovered.fg_stroke.color),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                if sw.protected {
+                    // The same red bar as List mode, inside the tile.
+                    let bar = egui::Rect::from_min_size(
+                        egui::pos2(rect.right() - 6.0, rect.top() + 6.0),
+                        egui::vec2(3.0, TILE - 12.0),
+                    );
+                    ui.painter().rect_filled(bar, 1.0, theme::STATE_DANGER);
+                }
+                let mut tile = tile.on_hover_text(if sw.protected {
+                    format!(
+                        "{} · protected · {}",
+                        sw.name,
+                        picker::opacity_tip(sw.opacity)
+                    )
+                } else {
+                    format!("{} · {}", sw.name, picker::opacity_tip(sw.opacity))
+                });
+                let mut rgba = sw.rgba();
+                let open = tile
+                    .double_clicked()
+                    .then_some(egui::SetOpenCommand::Bool(true));
+                picker::editor(&mut tile, &mut rgba, true, open);
+                if tile.clicked() || tile.changed() {
+                    s.swatch = sw.id;
+                }
+                if tile.changed() {
+                    s.set_swatch(sw.id, rgba);
+                }
+                tile.context_menu(|ui| {
+                    let field = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(160.0, 22.0));
+                    if !rename_field(ui, s, sw, rename, field) {
+                        swatch_menu(ui, s, sw, index, swatches.len(), rename);
+                    }
+                });
+            });
         }
     });
 }

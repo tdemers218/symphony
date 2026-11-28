@@ -5351,6 +5351,12 @@ impl SymphonyApp {
             if let (None, Ok(name)) = (self.maximised, std::env::var("SYMPHONY_SHOT_MAX")) {
                 self.maximised = View::ALL.into_iter().find(|v| v.title() == name);
             }
+            // SYMPHONY_SHOT_SWATCHES: the Colour view in Swatch mode.
+            if std::env::var_os("SYMPHONY_SHOT_SWATCHES").is_some() {
+                ctx.data_mut(|d| {
+                    d.insert_persisted(egui::Id::unique("colour-view-swatch-mode"), true)
+                });
+            }
             // SYMPHONY_SHOT_ZOOM=<percent>: the canvas zoom.
             if let Some(z) = std::env::var("SYMPHONY_SHOT_ZOOM")
                 .ok()
