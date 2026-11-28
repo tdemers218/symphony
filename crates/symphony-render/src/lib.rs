@@ -1174,6 +1174,32 @@ mod tests {
         );
     }
 
+    /// The order in docs/plans/colour-system.md: brush opacity caps the
+    /// dabs' coverage, the swatch's own opacity multiplies it, and layer
+    /// transparency and blending come last (effects.rs tests those).
+    #[test]
+    fn brush_opacity_and_colour_opacity_multiply() {
+        let mut scene = scene_with_line();
+        let drawing = scene.drawings.values_mut().next().unwrap();
+        let stroke = &mut drawing.strokes[0];
+        stroke.texture = Some(symphony_core::stroke::StrokeTexture {
+            tip: None,
+            grain: None,
+            spacing: 0.1,
+            opacity: 0.5,
+            flow: 1.0,
+            hardness: 1.0,
+            opacity_by_pressure: [1.0; 4],
+            ..Default::default()
+        });
+        let swatch = stroke.swatch;
+        scene.palette.get_mut(swatch).unwrap().opacity = 128;
+        let image = render_camera(&scene, 1, 200, 100, None).unwrap();
+        let most = image.pixels().iter().map(|p| p.alpha()).max().unwrap();
+        // 0.5 x 128/255 of full coverage: a quarter.
+        assert!((63..=65).contains(&most), "{most}");
+    }
+
     #[test]
     fn renders_ink_on_paper() {
         let s = scene_with_line();

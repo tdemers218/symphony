@@ -5357,6 +5357,25 @@ impl SymphonyApp {
                     d.insert_persisted(egui::Id::unique("colour-view-swatch-mode"), true)
                 });
             }
+            // SYMPHONY_SHOT_PICKER=<0 Square|1 Triangle|2 Perceptual>: the
+            // current colour's editor open in that layout.
+            if let Some(layout) = std::env::var("SYMPHONY_SHOT_PICKER")
+                .ok()
+                .and_then(|v| v.parse::<u8>().ok())
+            {
+                ctx.data_mut(|d| {
+                    d.insert_persisted(egui::Id::unique("colour-editor-layout"), layout);
+                    d.insert_temp(egui::Id::unique("shot-open-colour-editor"), true);
+                });
+            }
+            // SYMPHONY_SHOT_SWATCH=<index>: the current colour.
+            if let Some(sw) = std::env::var("SYMPHONY_SHOT_SWATCH")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .and_then(|i| self.s.doc.palette.swatches.get(i))
+            {
+                self.s.swatch = sw.id;
+            }
             // SYMPHONY_SHOT_ZOOM=<percent>: the canvas zoom.
             if let Some(z) = std::env::var("SYMPHONY_SHOT_ZOOM")
                 .ok()

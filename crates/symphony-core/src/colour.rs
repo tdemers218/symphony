@@ -103,13 +103,17 @@ impl From<Oklch> for Oklab {
 }
 
 /// How far outside 0..=1 a linear channel may sit and still count as in
-/// gamut (rounding in the matrices, not a visible difference).
-const GAMUT_SLACK: f32 = 1e-4;
+/// gamut: f32 rounding in the matrices, so relative to the colour's own
+/// size. A fixed slack would be huge next to a dark colour's tiny linear
+/// values and let its chroma run past the real edge.
+const GAMUT_SLACK: f32 = 2e-6;
 
 fn fits([r, g, b]: [f32; 3]) -> bool {
+    let size = r.abs().max(g.abs()).max(b.abs());
+    let below = -GAMUT_SLACK * size;
     [r, g, b]
         .iter()
-        .all(|c| (-GAMUT_SLACK..=1.0 + GAMUT_SLACK).contains(c))
+        .all(|&c| c >= below && c <= 1.0 + GAMUT_SLACK)
 }
 
 impl Oklch {
@@ -162,6 +166,18 @@ impl Oklch {
         [from_linear(r), from_linear(g), from_linear(b)]
     }
 }
+
+// How the opacities combine, everywhere paint is laid down:
+//
+// 1. Brush **flow** (per dab, with its pressure curve) builds coverage up
+//    to at most brush **opacity**: how the paint goes down (the brush).
+// 2. The swatch's **colour opacity** multiplies that coverage: how
+//    see-through the paint itself is. It travels with the swatch to
+//    every brush and to fills.
+// 3. The drawing is then composited with the layer's **transparency** and
+//    **blend mode** (`composite` below).
+//
+// render's `brush_opacity_and_colour_opacity_multiply` checks 1 and 2.
 
 // Blending. The renderer, the picker's preview and inverse blending all go
 // through these, so what the picker shows is what the render makes.
@@ -399,6 +415,20 @@ mod tests {
             );
         }
         assert_eq!(Oklch::max_chroma(1.0, 30.0), 0.0);
+    }
+
+    #[test]
+    fn the_gamut_edge_narrows_smoothly_towards_black() {
+        // Below the cusp, darker never allows more chroma.
+        for h in [30.0, 140.0, 264.0] {
+            let mut last = f32::MAX;
+            for i in 0..=40 {
+                let l = 0.4 - i as f32 * 0.01;
+                let c = Oklch::max_chroma(l, h);
+                assert!(c <= last + 1e-4, "hue {h}, l {l}: {c} after {last}");
+                last = c;
+            }
+        }
     }
 
     #[test]

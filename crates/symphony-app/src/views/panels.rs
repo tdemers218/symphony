@@ -1316,7 +1316,16 @@ fn swatch_row(
         .interact(chip_rect, ui.scope_id().with("chip"), egui::Sense::click())
         .on_hover_text(format!("Edit colour · {}", picker::opacity_tip(sw.opacity)));
     let mut rgba = sw.rgba();
-    let toggle = chip.clicked().then_some(egui::SetOpenCommand::Toggle);
+    let mut toggle = chip.clicked().then_some(egui::SetOpenCommand::Toggle);
+    // Screenshot mode (SYMPHONY_SHOT_PICKER) opens the current colour's editor.
+    if selected
+        && ui
+            .ctx()
+            .data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("shot-open-colour-editor")))
+            .is_some()
+    {
+        toggle = Some(egui::SetOpenCommand::Bool(true));
+    }
     picker::editor(&mut chip, &mut rgba, true, toggle);
     if chip.clicked() || chip.changed() || row.clicked() {
         s.swatch = sw.id;
