@@ -601,6 +601,14 @@ fn add_node(s: &mut Session, kind: NodeKind, position: [f32; 2]) {
     } else {
         kind_label(&kind).into()
     };
+    // A new chart takes the next colour in the chart order, so a habit
+    // (head first, then torso...) gives the same colours in every scene.
+    let mut kind = kind;
+    if let NodeKind::Chart(chart) = &mut kind {
+        if chart.colour.is_none() {
+            chart.colour = Some(super::chart_edit::next_colour(&s.doc.graph));
+        }
+    }
     s.history.apply(
         &mut s.doc,
         "Add node",
@@ -2442,6 +2450,7 @@ fn chart_form(
             chart.colour = Some(rgb);
         }
     });
+    super::chart_edit::colour_swatches(ui, chart, id);
     widgets::checkbox(ui, &mut chart.visible, "Show on the canvas")
         .on_hover_text("Hiding only hides the guide; what it drives is unchanged.");
     widgets::checkbox(ui, &mut chart.locked, "Lock")

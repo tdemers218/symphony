@@ -176,6 +176,10 @@ A Smart Chart is an animator's timing chart that moves artwork. Search
   **Cut** and **Delete** act on the point on the current frame; Copy
   between points takes where the chart is.
 
+Each new chart takes the next colour in a fixed order (lilac, mint,
+aqua, rose, ...), so charting the head first gives a lilac head in every
+scene. Pick another colour under **More** or in Node Properties.
+
 Charts show in Camera and Drawing view and never appear in exports.
 Press Esc (or **More → Done**) to go back to your layer; the chart
 stays, drawn quietly.

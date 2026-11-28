@@ -107,7 +107,9 @@ A paper timing chart in a glass-lite finish:
 - **Path and points:** a thin line with a soft glow of its own colour, and short ticks. A key is its frame number in a small glass circle; a breakdown is a glass triangle. The point on the current frame is filled with the chart's colour, and between points the current frame is an amber ring.
 - **Only what's being worked on shows.** Curve handles appear when the pointer nears the point (or it has handles of its own). The rotate and scale needle shows only when switched on from the bar.
 - **Controls:** a glass pill bar next to the point, placed where it hides least of the chart (above, below, or beside the point), with More for the rest. The same settings are in Node Properties. Esc finishes editing.
-- **Colours:** calm, mid-dark hues that read on the stage and on artwork, away from the interface's own meanings (selection blue, time amber, danger red).
+- **Colours:** soft tones from the interface's own family (the Function view's curves), away from its meanings (selection blue, time amber, danger red).
+  New charts take them in a fixed order: lilac, mint, aqua, rose, lime, periwinkle, orchid, sage. Each takes the first colour no chart uses yet, so a habit like charting the head first gives the same colours in every scene. Pick any other colour from the swatches in More or in Node Properties.
+- **Shadow, not glow:** the line and ticks sit on a soft drop shadow, like the glass chips. Tristan chose it over a coloured glow after comparing the two.
 
 ## Performance ([18])
 

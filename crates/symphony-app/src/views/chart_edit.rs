@@ -37,19 +37,69 @@ const PATH_HIT: f32 = 6.0;
 /// Polyline points per segment when drawing the path.
 const STEPS: usize = 24;
 
-/// Charts without a colour of their own take one of these, by node, so
-/// several charts on one scene stay told apart (and keep their colour).
-/// Calm, mid-dark hues that read on the light stage and on artwork, kept
-/// away from the interface's meanings: no selection blue, time amber or
-/// danger red.
-const COLOURS: [[u8; 3]; 6] = [
-    [128, 96, 232],
-    [20, 150, 140],
-    [204, 84, 150],
-    [112, 146, 36],
-    [164, 82, 196],
-    [62, 128, 168],
+/// The chart colours, in the order new charts take them: the first chart
+/// in a scene is always lilac, the second mint, and so on, so an animator
+/// who charts the head first gets a lilac head in every scene. Soft
+/// tones from the same family as the interface's own (the Function
+/// view's curves), kept away from its meanings: no selection blue, time
+/// amber or danger red. A shadow under the line keeps them readable on
+/// the light stage.
+pub const COLOURS: [(&str, [u8; 3]); 8] = [
+    ("Lilac", [201, 154, 242]),
+    ("Mint", [108, 203, 142]),
+    ("Aqua", [92, 207, 208]),
+    ("Rose", [240, 140, 192]),
+    ("Lime", [184, 216, 106]),
+    ("Periwinkle", [150, 156, 246]),
+    ("Orchid", [226, 132, 226]),
+    ("Sage", [160, 190, 160]),
 ];
+
+/// The colour a new chart in `graph` takes: the first in the order that
+/// no chart uses yet, or round again once all are taken.
+pub fn next_colour(graph: &symphony_core::graph::Graph) -> [u8; 3] {
+    let used: Vec<[u8; 3]> = graph
+        .nodes()
+        .filter_map(|(id, n)| match &n.kind {
+            NodeKind::Chart(c) => Some(c.colour.unwrap_or(COLOURS[id.0 % COLOURS.len()].1)),
+            _ => None,
+        })
+        .collect();
+    COLOURS
+        .iter()
+        .map(|(_, rgb)| *rgb)
+        .find(|rgb| !used.contains(rgb))
+        .unwrap_or(COLOURS[used.len() % COLOURS.len()].1)
+}
+
+/// The chart colours as a row of swatches to click.
+pub fn colour_swatches(ui: &mut egui::Ui, chart: &mut Chart, id: NodeId) {
+    let current = colour(chart, id);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (name, rgb) in COLOURS {
+            let c = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+            let (rect, response) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+            ui.painter().circle_filled(rect.center(), 7.0, c);
+            if c == current {
+                ui.painter().circle_stroke(
+                    rect.center(),
+                    8.5,
+                    EStroke::new(1.5, theme::TEXT_PRIMARY),
+                );
+            } else if response.hovered() {
+                ui.painter().circle_stroke(
+                    rect.center(),
+                    8.5,
+                    EStroke::new(1.0, theme::TEXT_SECONDARY),
+                );
+            }
+            if response.on_hover_text(name).clicked() {
+                chart.colour = Some(rgb);
+            }
+        }
+    });
+}
 
 /// Canvas HUD glass (glass-lite: overlays over the canvas are nearly
 /// opaque, about 86%, with a faint light rim), premultiplied.
@@ -60,7 +110,7 @@ const HANDLE_REVEAL: f32 = 56.0;
 
 /// The colour chart `id` is drawn in.
 pub fn colour(chart: &Chart, id: NodeId) -> Color32 {
-    let [r, g, b] = chart.colour.unwrap_or(COLOURS[id.0 % COLOURS.len()]);
+    let [r, g, b] = chart.colour.unwrap_or(COLOURS[id.0 % COLOURS.len()].1);
     Color32::from_rgb(r, g, b)
 }
 
@@ -687,11 +737,13 @@ fn draw_quiet(
     colour: Color32,
     screen: &impl Fn([f32; 2]) -> Pos2,
 ) {
-    let faint = colour.gamma_multiply(0.5);
+    let faint = colour.gamma_multiply(0.7);
+    let path = path_shape(b, screen);
     painter.add(egui::Shape::line(
-        path_shape(b, screen),
-        EStroke::new(1.0, faint),
+        path.iter().map(|p| *p + Vec2::new(0.0, 1.0)).collect(),
+        EStroke::new(2.0, Color32::from_black_alpha(40)),
     ));
+    painter.add(egui::Shape::line(path, EStroke::new(1.0, faint)));
     let ring = EStroke::new(1.0, colour.gamma_multiply(0.75));
     for p in &b.chart.points {
         let at = screen(p.pos);
@@ -821,14 +873,19 @@ fn draw_selected(
     } else {
         colour.gamma_multiply(0.45)
     };
-    // A thin line with a soft glow of its own colour: light on the
-    // artwork, readable on dark and light alike.
+    // A thin line lifted off the artwork by a soft shadow, like the
+    // glass chips: readable on the light stage and on dark artwork.
     let path = path_shape(b, screen);
+    let shadow: Vec<Pos2> = path.iter().map(|p| *p + Vec2::new(0.0, 1.5)).collect();
     painter.add(egui::Shape::line(
-        path.clone(),
-        EStroke::new(7.0, colour.gamma_multiply(0.14)),
+        shadow.clone(),
+        EStroke::new(5.0, Color32::from_black_alpha(28)),
     ));
-    painter.add(egui::Shape::line(path, EStroke::new(1.5, colour)));
+    painter.add(egui::Shape::line(
+        shadow,
+        EStroke::new(2.5, Color32::from_black_alpha(70)),
+    ));
+    painter.add(egui::Shape::line(path, EStroke::new(1.75, colour)));
     // Spacing: a short tick across the path on every frame, as on paper.
     for mark in &b.marks {
         if b.chart.point_on(mark.frame).is_some() {
@@ -841,6 +898,11 @@ fn draw_selected(
         } else {
             (4.0, 1.25)
         };
+        let drop = Vec2::new(0.0, 1.5);
+        painter.line_segment(
+            [p - n * long + drop, p + n * long + drop],
+            EStroke::new(width + 1.25, Color32::from_black_alpha(70)),
+        );
         painter.line_segment([p - n * long, p + n * long], EStroke::new(width, colour));
     }
     // The current point's handles: a line out to a small glass dot.
@@ -1103,6 +1165,7 @@ fn more_menu(
         }
         ui.separator();
     }
+    colour_swatches(ui, c, id);
     follow_toggle(ui, s, id);
     hint(
         ui,
@@ -1259,6 +1322,21 @@ pub fn point_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// New charts take the colours in order (the first is always lilac),
+    /// skipping ones in use; a freed colour is reused first.
+    #[test]
+    fn new_charts_take_colours_in_order() {
+        let mut s = Session::new_scene();
+        let first = new_chart(&mut s);
+        let second = new_chart(&mut s);
+        let rgb = |s: &Session, id| chart_of(s, id).colour;
+        assert_eq!(rgb(&s, first), Some(COLOURS[0].1));
+        assert_eq!(rgb(&s, second), Some(COLOURS[1].1));
+        crate::views::node::delete_nodes(&mut s, &[first]);
+        let third = new_chart(&mut s);
+        assert_eq!(rgb(&s, third), Some(COLOURS[0].1), "lilac was free again");
+    }
 
     fn chart_of(s: &Session, id: NodeId) -> Chart {
         match &s.doc.graph.node(id).unwrap().kind {
