@@ -312,6 +312,7 @@ pub fn kind_label(kind: &NodeKind) -> &'static str {
         NodeKind::Composite => "Composite",
         NodeKind::Display => "Camera",
         NodeKind::Write => "Write",
+        NodeKind::Chart(_) => "Smart Chart",
         NodeKind::Effect(Effect::Mask { .. }) => "Mask",
         NodeKind::Effect(Effect::Blur { .. }) => "Blur",
         NodeKind::Effect(Effect::Grain { .. }) => "Grain",
@@ -2870,7 +2871,11 @@ fn arrange_columns(
 /// effects on a composite and nested composites retain top-down flow.
 fn arrange_band(kind: &NodeKind) -> usize {
     match kind {
-        NodeKind::Peg(_) | NodeKind::Skeleton(_) | NodeKind::Bone(_) | NodeKind::MeshWarp(_) => 0,
+        NodeKind::Peg(_)
+        | NodeKind::Skeleton(_)
+        | NodeKind::Bone(_)
+        | NodeKind::MeshWarp(_)
+        | NodeKind::Chart(_) => 0,
         NodeKind::Drawing { .. } | NodeKind::Gradient(_) => 1,
         NodeKind::Effect(_) => 2,
         NodeKind::Composite => 3,
@@ -4372,6 +4377,11 @@ fn library_details(kind: &NodeKind) -> (&'static str, &'static str) {
         NodeKind::Write => (
             "Output",
             "Marks an output in the node graph. Export is available from the File menu.",
+        ),
+        NodeKind::Chart(_) => (
+            "Motion",
+            "A timing and spacing chart: points on key poses, a smooth path and \
+             frame spacing. A guide on its own; changes no artwork.",
         ),
     }
 }

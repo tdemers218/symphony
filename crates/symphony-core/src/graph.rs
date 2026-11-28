@@ -120,6 +120,10 @@ pub enum NodeKind {
     Composite,
     Effect(Effect),
     Gradient(Gradient),
+    /// A Smart Chart: motion described on its own (chart.rs). It draws
+    /// nothing and changes no artwork; nodes that follow it read it.
+    /// Boxed: its points make it big.
+    Chart(Box<crate::chart::Chart>),
     /// What the Camera view shows.
     Display,
     /// Render output.
@@ -663,7 +667,8 @@ impl Graph {
                 target.kind,
                 NodeKind::Composite | NodeKind::Effect(_) | NodeKind::Display | NodeKind::Write
             ),
-            NodeKind::Display | NodeKind::Write => false,
+            // Charts drive nothing yet (Milestone 4 adds a Motion port).
+            NodeKind::Display | NodeKind::Write | NodeKind::Chart(_) => false,
         };
         if !valid {
             return false;
@@ -805,6 +810,8 @@ impl Graph {
             NodeKind::Gradient(gradient) => out.push(RenderCommand::Gradient(
                 key.and_then(|key| key.gradient).unwrap_or(*gradient),
             )),
+            // Motion, not an image: a chart never renders.
+            NodeKind::Chart(_) => {}
             NodeKind::Effect(Effect::Mask { inverted }) => {
                 if let Some(image) = self.input(id, 0) {
                     if let Some(matte) = self.input(id, 1).filter(|_| enabled) {
@@ -1413,6 +1420,27 @@ impl Graph {
 mod tests {
     use super::*;
     use crate::xsheet::Column;
+
+    /// A chart is motion only: it can't be wired into the image or
+    /// transform flow (yet), and having one changes no render.
+    #[test]
+    fn a_chart_renders_nothing_and_connects_to_nothing() {
+        let mut graph = Graph::default();
+        let drawing = graph.add("Drawing", NodeKind::Drawing { column: Id(1) });
+        let display = graph.add("Display", NodeKind::Display);
+        graph.connect(drawing, display, 0);
+        let count = |g: &Graph| {
+            g.render_commands(display, &Xsheet::default(), 1)
+                .map(|c| c.len())
+        };
+        let before = count(&graph);
+        let chart = graph.add("Head", NodeKind::Chart(Box::default()));
+        for other in [drawing, display] {
+            assert!(!graph.can_connect(chart, other));
+            assert!(!graph.can_connect(other, chart));
+        }
+        assert_eq!(count(&graph), before);
+    }
 
     #[test]
     fn face_camera_preserves_ink_orientation_without_flattening_the_stage_plane() {

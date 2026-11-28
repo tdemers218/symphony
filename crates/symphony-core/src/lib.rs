@@ -8,6 +8,7 @@
 
 pub mod anim;
 pub mod b64;
+pub mod chart;
 pub mod doc;
 pub mod graph;
 pub mod history;

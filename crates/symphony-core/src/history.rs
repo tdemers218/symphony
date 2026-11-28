@@ -773,6 +773,37 @@ mod tests {
     use crate::doc::Settings;
     use crate::stroke::{ArtLayer, Point, StrokeKind};
 
+    /// Dragging a chart point is one undo step, however many frames the
+    /// drag lasts; undo puts the chart back as it was.
+    #[test]
+    fn a_chart_drag_undoes_in_one_step() {
+        use crate::chart::{Chart, Role};
+        use crate::graph::{Node, NodeKind};
+        let (mut s, mut h) = scene_with_layer();
+        let mut chart = Chart::default();
+        chart.set_point(1, [0.0, 0.0], Role::Key);
+        let id = s.graph.add("Head", NodeKind::Chart(Box::new(chart)));
+        let original = s.graph.node(id).unwrap().clone();
+        let steps = h.undo_len();
+        for x in 1..=30 {
+            let before = s.graph.node(id).unwrap().clone();
+            let mut after: Node = before.clone();
+            if let NodeKind::Chart(c) = &mut after.kind {
+                c.set_point(1, [x as f32, 0.0], Role::Key);
+            }
+            h.apply_merged(
+                &mut s,
+                "Move chart point",
+                "chart",
+                Edit::SetNodeProperties { id, before, after },
+            );
+        }
+        h.seal();
+        assert_eq!(h.undo_len(), steps + 1);
+        h.undo(&mut s);
+        assert_eq!(s.graph.node(id), Some(&original));
+    }
+
     fn scene_with_layer() -> (Scene, History) {
         let mut s = Scene::new(Settings::default());
         let mut h = History::default();

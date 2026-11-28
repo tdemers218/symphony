@@ -356,6 +356,34 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A Smart Chart saves and reopens with exactly the same motion.
+    #[test]
+    fn a_chart_reopens_with_the_same_motion() {
+        use symphony_core::chart::{Chart, ChartCurve, Role};
+        use symphony_core::graph::NodeKind;
+        let dir = temp("chart");
+        let path = dir.join("Arc");
+        let mut s = sample();
+        let mut chart = Chart::default();
+        chart.set_point(1, [0.0, 0.0], Role::Key);
+        chart.set_point(12, [120.0, -70.0], Role::Key);
+        chart.set_point(24, [240.0, 10.0], Role::Key);
+        chart.points[0].timing.ease_out = 0.6;
+        chart.set_rotation(24, 400.0);
+        let id = s.graph.add("Hand", NodeKind::Chart(Box::new(chart)));
+        save(&s, &path).unwrap();
+        let back = open(&with_extension(&path)).unwrap();
+        let curve = |scene: &Scene| match &scene.graph.node(id).unwrap().kind {
+            NodeKind::Chart(c) => ChartCurve::new(c),
+            other => panic!("not a chart: {other:?}"),
+        };
+        let (a, b) = (curve(&s), curve(&back));
+        for f in 0..60 {
+            assert_eq!(a.sample(f as f32 * 0.5), b.sample(f as f32 * 0.5));
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn imported_media_is_copied_into_the_project_and_found_again() {
         let dir = temp("media");
