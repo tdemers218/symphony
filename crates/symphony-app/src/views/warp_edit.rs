@@ -123,7 +123,7 @@ pub fn ui(
     };
     let on_screen: Vec<Pos2> = points.iter().map(|&p| screen(p)).collect();
     let pointer = response.hover_pos().or(response.interact_pointer_pos());
-    let nearest = pointer.and_then(|p| {
+    let point_at = |p: Pos2| {
         on_screen
             .iter()
             .enumerate()
@@ -131,10 +131,15 @@ pub fn ui(
             .filter(|(_, d)| *d <= GRAB)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i)
-    });
+    };
+    let nearest = pointer.and_then(point_at);
     state.hover = nearest;
     if response.drag_started() {
-        state.dragging = nearest;
+        // The point under the press, not under the pointer now: a drag
+        // only starts once the pointer has moved, and a quick one can by
+        // then be nearer a neighbouring grid point.
+        let origin = ui.input(|i| i.pointer.press_origin()).or(pointer);
+        state.dragging = origin.and_then(point_at);
     }
     let placing = warp.kind == WarpKind::Points && warp.mesh.is_none();
     // Placing points: a click adds one; Alt-click removes one.

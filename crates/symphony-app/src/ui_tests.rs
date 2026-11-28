@@ -2290,6 +2290,73 @@ fn points_warp_bends_only_the_connected_artwork() {
     assert!(ink(965, 840), "the ball (no point on it) didn't move");
 }
 
+/// A quick drag takes the Mesh Warp point under the press, even when the
+/// pointer is nearer a neighbour by the time the drag starts.
+#[test]
+fn a_quick_warp_drag_moves_the_pressed_point() {
+    use symphony_core::graph::NodeKind;
+    use symphony_core::warp::WarpKind;
+    let mut h = rig();
+    let warp = {
+        let s = &mut h.state_mut().s;
+        let node = s.doc.layers[0].node;
+        crate::views::node::insert_near(s, node, crate::views::node::mesh_warp(1920, 1080));
+        let warp = s.doc.graph.input(node, 0).unwrap();
+        s.select_graph_node(warp, false);
+        s.tool = Tool::Transform;
+        warp
+    };
+    h.run_steps(2);
+    // Two points 16 screen pixels apart.
+    let a = h.state().canvas.to_screen(0.0, 0.0);
+    let unit = (h.state().canvas.to_screen(1.0, 0.0) - a).length();
+    let gap = 16.0 / unit;
+    if let NodeKind::MeshWarp(w) = &mut h.state_mut().s.doc.graph.node_mut(warp).unwrap().kind {
+        w.kind = WarpKind::Points;
+        w.pins = vec![[0.0, 0.0], [gap, 0.0]];
+        w.pin_moves = vec![
+            [
+                symphony_core::anim::Value::Constant(0.0),
+                symphony_core::anim::Value::Constant(0.0),
+            ];
+            2
+        ];
+    }
+    h.run_steps(2);
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    h.input_mut()
+        .events
+        .extend([egui::Event::PointerMoved(a), button(a, true)]);
+    h.step();
+    // The first move lands nearer the second point; then down 60.
+    for p in [
+        a + egui::vec2(12.0, 0.0),
+        a + egui::vec2(12.0, 30.0),
+        a + egui::vec2(0.0, 60.0),
+    ] {
+        h.input_mut().events.push(egui::Event::PointerMoved(p));
+        h.step();
+    }
+    h.input_mut()
+        .events
+        .push(button(a + egui::vec2(0.0, 60.0), false));
+    h.run_steps(2);
+    let NodeKind::MeshWarp(w) = &h.state().s.doc.graph.node(warp).unwrap().kind else {
+        unreachable!()
+    };
+    assert!(
+        w.pins[0][1].abs() > 10.0 / unit,
+        "the pressed point moved: {:?}",
+        w.pins
+    );
+    assert_eq!(w.pins[1], [gap, 0.0], "its neighbour stayed");
+}
+
 /// Deleting from the Node view and Timeline: an added peg or Mesh Warp
 /// goes and its chain closes up (the drawing stays under the layer's
 /// peg); a Drawing node takes its layer; the Camera and a layer's own peg
