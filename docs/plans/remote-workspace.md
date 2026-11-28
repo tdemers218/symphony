@@ -26,6 +26,10 @@ plan comes from Tristan's brief (2026-11-28) and an audit of the code at
   carries a secret key in the URL's `#` part, which browsers never send
   over the network. Every message after the page loads is sealed with it
   (NaCl secretbox). Limits are in *Security* below.
+- **Draw on a tablet.** An iPad with Apple Pencil or a Galaxy Tab with
+  S Pen becomes a drawing surface: the Drawing view on the tablet, with
+  pressure and tilt, going through Symphony's own stroke pipeline. See
+  *Tablet drawing*.
 - **First milestone:** "Connect device" in search → QR code → the phone
   shows a brush-size slider that stays in sync both ways. Tested on
   Tristan's iPhone and an Android phone before anything else is built.
@@ -99,6 +103,61 @@ Search on the phone is an ordinary text field. The phone keyboard's microphone b
 
 The phone's own operating system does the speech recognition. Symphony never receives audio, so this stays inside the AI policy; the devices window says so. Values in a request ("opacity to forty percent") are a search feature to add later, and they'll work the same from the desktop.
 
+## Tablet drawing
+
+Tristan's addition: the Drawing view works on tablets with Apple Pencil
+and Samsung S Pen, so people can draw in Symphony on their tablet.
+
+- **Pen input.** Browsers report pens through Pointer Events: `pointerType`
+  is `"pen"`, with `pressure`, `tiltX` and `tiltY`, and the extra
+  in-between samples (`getCoalescedEvents`) where the browser offers them.
+  The page turns each sample into the fields of `symphony_pen::PenSample`
+  (position, pressure, tilt, phase, time).
+  - On the desktop they go through the same stroke pipeline as a Wacom or
+    Veikk: pressure curve, smoothing, stabilization, the active brush.
+    The tablet is then simply one more pen backend, so the "one sample
+    format for every tablet" design in `symphony-pen` already covers it.
+  - Which browsers report which fields is to be checked on real devices
+    and recorded in `docs/TABLETS.md`, not assumed.
+- **Pen draws, fingers navigate.** Pen strokes draw. One finger does
+  nothing by default, which avoids marks from a resting palm. Two fingers
+  pan, pinch zooms and twist rotates the view. Two-finger tap undoes and
+  three-finger tap redoes, as in tablet drawing apps (both can be changed).
+  The page turns off the browser's own scrolling, zoom, text selection and
+  long-press menus on the canvas.
+- **No waiting for the network.** The tablet draws the stroke under the
+  pen tip itself, at once, as a plain preview. Samples go to the desktop
+  in small batches, about every 16 ms. When the desktop finishes the
+  stroke with the real brush, the finished stroke replaces the preview.
+  Wi-Fi delay then never shows under the pen.
+- **What the tablet shows.** No video. The tablet receives the current
+  drawing's strokes as data (vector lines and fills, with the light table
+  and onion skins when on) and draws them itself. After that it gets only
+  the strokes that changed. Bitmap layers come as image tiles, only for
+  what is on screen.
+  - The tablet's look is a close preview: textured brushes are simplified
+    at first.
+  - Building Symphony's own renderer for the browser (WebAssembly) would
+    make it exact; that's a later option, chosen once the simple version
+    has been tried.
+- **Tools on the tablet.** A compact toolbar: brush, pencil, eraser, the
+  colour, size, undo/redo and frame stepping. Everything else goes
+  through search. The tablet can show the Drawing panel next to Brushes
+  and Colours, or on its own, full screen.
+- **Speed checks:**
+  - pen-to-ink delay on the tablet;
+  - samples per second that reach the desktop;
+  - the desktop's frame time while a tablet draws (`scripts/perf.sh`).
+- **Tests:**
+  - samples become correct `PenSample`s (pressure, tilt, phase);
+  - a stroke drawn from a simulated tablet equals the same stroke drawn
+    locally;
+  - a dropped connection mid-stroke never leaves a half-stroke or a stuck
+    pen;
+  - undo/redo from the tablet;
+  - then Tristan on an iPad with Apple Pencil and a Samsung tablet with
+    S Pen.
+
 ## Milestones
 
 1. **Connection prototype.**
@@ -115,7 +174,8 @@ The phone's own operating system does the speech recognition. Symphony never rec
    - **Then Tristan tries it on iPhone Safari and Android Chrome, and with the Wi-Fi offline, before Milestone 2.**
 2. **Useful.** Brushes (presets with small previews, made on a worker and cached by preset), Colours (palette, picker, current colour), Search (with confirmation), Playback (play, step, scrub, range). Reconnection and resync, undo grouping for slider drags, timings in `scripts/perf.sh` with two devices connected.
 3. **Flexible.** Panels assigned per device, Mirror / Move from a panel's menu and from search, a "bring back" notice when a device leaves, layouts remembered per device, tablet layouts, tool properties that follow the active tool.
-4. **Later.** Push-to-talk, custom control surfaces (dials, XY pads, macros bound to commands and properties, changing with context: brush size while drawing, chart curvature in Smart Charts), node editor, Xsheet, Smart Chart controls, layers.
+4. **Tablet drawing.** The Drawing view on tablets with Apple Pencil and S Pen, as above. It comes after Milestone 2 because it needs the connection, sync and undo work done there.
+5. **Later.** Push-to-talk, custom control surfaces (dials, XY pads, macros bound to commands and properties, changing with context: brush size while drawing, chart curvature in Smart Charts), node editor, Xsheet, Smart Chart controls, layers.
 
 ## New dependencies (Milestone 1)
 
