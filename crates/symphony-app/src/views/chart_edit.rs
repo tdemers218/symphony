@@ -1444,6 +1444,26 @@ pub fn point_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId) {
             c.set_scale(frame, [size / 100.0, size / 100.0]);
         }
     });
+    // 3D: tilt about X and Y on this frame, as a peg's 3D rotation.
+    ui.horizontal(|ui| {
+        ui.label("Tilt");
+        let mut tilt = c.tilt_at(frame);
+        let mut changed = false;
+        for (axis, value) in ["X ", "Y "].into_iter().zip(tilt.iter_mut()) {
+            changed |= ui
+                .add(
+                    egui::DragValue::new(value)
+                        .speed(1.0)
+                        .prefix(axis)
+                        .suffix("°"),
+                )
+                .on_hover_text("3D tilt on this frame. A following peg tilts with it.")
+                .changed();
+        }
+        if changed {
+            c.set_tilt(frame, tilt);
+        }
+    });
 }
 
 #[cfg(test)]

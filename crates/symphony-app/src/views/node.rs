@@ -1838,6 +1838,8 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
                         .on_hover_text("Turn with the chart's rotation.");
                     widgets::checkbox(ui, &mut peg.follow.scale, "Scale")
                         .on_hover_text("Grow and shrink with the chart's scale.");
+                    widgets::checkbox(ui, &mut peg.follow.tilt, "Tilt")
+                        .on_hover_text("Turn in 3D with the chart's tilt.");
                 });
             }
         }

@@ -49,6 +49,9 @@ pub struct Follow {
     pub rotation: bool,
     #[serde(default = "crate::chart::yes")]
     pub scale: bool,
+    /// The chart's 3D tilt.
+    #[serde(default = "crate::chart::yes")]
+    pub tilt: bool,
 }
 
 impl Default for Follow {
@@ -56,6 +59,7 @@ impl Default for Follow {
         Follow {
             rotation: true,
             scale: true,
+            tilt: true,
         }
     }
 }
@@ -481,6 +485,17 @@ impl StagePose {
             front: None,
             camera_facing: false,
         }
+    }
+
+    /// A 3D turn about X then Y (degrees), as a peg's tilt turns.
+    fn tilt(angles: [f32; 2]) -> Self {
+        let (sx, cx) = angles[0].to_radians().sin_cos();
+        let (sy, cy) = angles[1].to_radians().sin_cos();
+        Self::from_rows([
+            [cy, sy * sx, sy * cx, 0.0],
+            [0.0, cx, -sx, 0.0],
+            [-sy, cy * sx, cy * cx, 0.0],
+        ])
     }
 
     fn flat(t: Affine) -> Self {
@@ -1437,9 +1452,10 @@ impl Graph {
 
     /// What a peg's chart adds on `frame`, in the peg's parent space: the
     /// artwork travels with the chart from where the chart starts, and
-    /// turns and scales around the chart's current position. None when
-    /// the peg follows no chart, or the chart is off.
-    pub fn chart_motion(&self, peg: NodeId, frame: u32) -> Option<Affine> {
+    /// turns, tilts and scales around the chart's current position. None
+    /// when the peg follows no chart, or the chart is off. Also the flat
+    /// part (without tilt) and whether it tilts.
+    fn chart_motion_parts(&self, peg: NodeId, frame: u32) -> Option<(StagePose, Affine, bool)> {
         let NodeKind::Peg(p) = &self.node(peg)?.kind else {
             return None;
         };
@@ -1450,20 +1466,40 @@ impl Graph {
         let curve = crate::chart::shared_curve(chart);
         let start = curve.position(f32::MIN)?;
         let m = curve.sample(frame as f32)?;
-        let mut t = Affine::translate(m.position[0], m.position[1]);
+        let at = Affine::translate(m.position[0], m.position[1]);
+        let mut turn = Affine::IDENTITY;
         if p.follow.rotation {
-            t = t.compose(Affine::rotate_deg(m.rotation));
+            turn = turn.compose(Affine::rotate_deg(m.rotation));
         }
         if p.follow.scale {
-            t = t.compose(Affine::scale(m.scale[0], m.scale[1]));
+            turn = turn.compose(Affine::scale(m.scale[0], m.scale[1]));
         }
-        Some(t.compose(Affine::translate(-start[0], -start[1])))
+        let turn = turn.compose(Affine::translate(-start[0], -start[1]));
+        let flat = at.compose(turn);
+        let tilted = p.follow.tilt && m.tilt != [0.0; 2];
+        let pose = if tilted {
+            StagePose::flat(at)
+                .compose(StagePose::tilt(m.tilt))
+                .compose(StagePose::flat(turn))
+        } else {
+            StagePose::flat(flat)
+        };
+        Some((pose, flat, tilted))
+    }
+
+    /// The chart motion a peg gets on `frame`, as a 2D transform (a 3D
+    /// tilt as seen by the camera). None when it follows no chart.
+    pub fn chart_motion(&self, peg: NodeId, frame: u32) -> Option<Affine> {
+        self.chart_motion_parts(peg, frame)
+            .map(|(pose, ..)| pose.transform)
     }
 
     /// A peg's own transform on `frame`, with the chart it follows.
     pub fn peg_transform(&self, id: NodeId, peg: &PegParams, frame: u32) -> Affine {
-        let own = peg.transform_at(frame);
-        self.chart_motion(id, frame).map_or(own, |m| m.compose(own))
+        let own = peg.stage_transform(frame);
+        self.chart_motion_parts(id, frame)
+            .map_or(own, |(m, ..)| m.compose(own))
+            .transform
     }
 
     fn eval_transform(&self, id: NodeId, frame: u32, depth: usize) -> Result<StagePose, EvalError> {
@@ -1478,18 +1514,20 @@ impl Graph {
                     .sample_key(id, frame)
                     .map_or(node.enabled, |key| key.enabled) =>
             {
-                let motion = self.chart_motion(id, frame);
+                let motion = self.chart_motion_parts(id, frame);
                 let local = p.stage_transform(frame);
-                let local = motion.map_or(local, |m| StagePose::flat(m).compose(local));
+                let local = motion.as_ref().map_or(local, |(m, ..)| m.compose(local));
                 let mut pose = parent.compose(local);
-                if parent.front.is_some() || p.tilt_enabled {
+                // A chart's tilt turns the peg in 3D like its own tilt does.
+                let tilted = p.tilt_enabled || motion.as_ref().is_some_and(|(.., t)| *t);
+                if parent.front.is_some() || tilted {
                     let flat = p.flat_transform_at(frame);
                     let front = parent
                         .front
                         .unwrap_or(parent.transform)
-                        .compose(motion.map_or(flat, |m| m.compose(flat)));
+                        .compose(motion.as_ref().map_or(flat, |(_, m, _)| m.compose(flat)));
                     pose.front = Some(front);
-                    if p.tilt_enabled && p.face_camera {
+                    if tilted && p.face_camera {
                         let (x, y) = p.pivot;
                         let [px, py, _] = pose.point_at(x, y);
                         let (fx, fy) = front.apply(x, y);
@@ -1576,6 +1614,43 @@ mod tests {
         let mut off = graph.clone();
         off.node_mut(id).unwrap().enabled = false;
         assert_eq!(at(&off, 11, (10.0, 20.0)), [10.0, 20.0]);
+    }
+
+    /// A chart's 3D tilt reaches a following peg: tilting 60° about Y
+    /// foreshortens the artwork across (cos 60° = half), around the chart's
+    /// position, and the peg can leave it out.
+    #[test]
+    fn a_peg_takes_its_charts_tilt() {
+        use crate::chart::{Chart, Role};
+        let mut graph = Graph::default();
+        let drawing = graph.add("Card", NodeKind::Drawing { column: Id(1) });
+        let peg = graph.add("Card-P", NodeKind::Peg(PegParams::default()));
+        graph.connect(peg, drawing, 0);
+        let mut chart = Chart::default();
+        chart.set_point(1, [10.0, 0.0], Role::Key);
+        chart.set_point(9, [10.0, 0.0], Role::Key);
+        chart.set_tilt(1, [0.0, 0.0]);
+        chart.set_tilt(9, [0.0, 60.0]);
+        let id = graph.add("Chart", NodeKind::Chart(Box::new(chart)));
+        graph.connect(id, peg, MOTION_PORT);
+        let x = |g: &Graph, frame: u32, px: f32| {
+            g.world_transform(drawing, frame).unwrap().apply(px, 0.0).0
+        };
+        assert!((x(&graph, 1, 30.0) - 30.0).abs() < 1e-3);
+        // 20 across from the chart's point becomes 10 at 60°.
+        assert!(
+            (x(&graph, 9, 30.0) - 20.0).abs() < 1e-3,
+            "{}",
+            x(&graph, 9, 30.0)
+        );
+        assert!(
+            (x(&graph, 9, 10.0) - 10.0).abs() < 1e-3,
+            "turns around the chart"
+        );
+        if let Some(NodeKind::Peg(p)) = graph.node_mut(peg).map(|n| &mut n.kind) {
+            p.follow.tilt = false;
+        }
+        assert!((x(&graph, 9, 30.0) - 30.0).abs() < 1e-3);
     }
 
     #[test]

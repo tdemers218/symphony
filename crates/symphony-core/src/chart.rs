@@ -115,6 +115,11 @@ pub struct Chart {
     /// Degrees. Past 360 is more turns, not the same angle.
     #[serde(default)]
     pub rotation: Value,
+    /// 3D orientation: tilt about the X and Y axes in degrees, keyed like
+    /// rotation (which is the Z axis). The same angles a peg's 3D rotation
+    /// uses, so a following peg tilts exactly as keyed. None until keyed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tilt: Option<Box<[Value; 2]>>,
     /// Display colour; `None` uses the chart's place in the scene.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colour: Option<[u8; 3]>,
@@ -133,6 +138,7 @@ impl Default for Chart {
             points: Vec::new(),
             scale: unit_scale(),
             rotation: Value::Constant(0.0),
+            tilt: None,
             colour: None,
             visible: true,
             locked: false,
@@ -377,11 +383,40 @@ impl Chart {
     /// rotation key), for the Timeline.
     pub fn key_frames(&self) -> impl Iterator<Item = u32> + '_ {
         self.points.iter().map(|p| p.frame).chain(
-            self.scale
-                .iter()
-                .chain([&self.rotation])
+            self.channels()
                 .flat_map(|v| v.keys().iter().map(|k| k.frame)),
         )
+    }
+
+    /// The keyed channels: scale X and Y, rotation, and tilt if any.
+    fn channels(&self) -> impl Iterator<Item = &Value> + '_ {
+        self.scale
+            .iter()
+            .chain([&self.rotation])
+            .chain(self.tilt.iter().flat_map(|t| t.iter()))
+    }
+
+    fn channels_mut(&mut self) -> impl Iterator<Item = &mut Value> + '_ {
+        self.scale
+            .iter_mut()
+            .chain([&mut self.rotation])
+            .chain(self.tilt.iter_mut().flat_map(|t| t.iter_mut()))
+    }
+
+    /// Key the 3D tilt (X and Y degrees) on `frame`.
+    pub fn set_tilt(&mut self, frame: u32, degrees: [f32; 2]) {
+        let tilt = self
+            .tilt
+            .get_or_insert_with(|| Box::new([Value::Constant(0.0), Value::Constant(0.0)]));
+        tilt[0].set_key(frame, degrees[0]);
+        tilt[1].set_key(frame, degrees[1]);
+    }
+
+    /// The tilt on `frame` (zero when there's none).
+    pub fn tilt_at(&self, frame: u32) -> [f32; 2] {
+        self.tilt
+            .as_ref()
+            .map_or([0.0; 2], |t| [t[0].at(frame), t[1].at(frame)])
     }
 
     /// Make room for `count` new frames starting at `from`: points and
@@ -403,7 +438,7 @@ impl Chart {
         for p in &mut self.points {
             shift(&mut p.frame);
         }
-        for v in self.scale.iter_mut().chain([&mut self.rotation]) {
+        for v in self.channels_mut() {
             if let Value::Keys(keys) = v {
                 for k in keys.iter_mut() {
                     shift(&mut k.frame);
@@ -422,7 +457,7 @@ impl Chart {
         for p in &mut self.points {
             later(&mut p.frame);
         }
-        for v in self.scale.iter_mut().chain([&mut self.rotation]) {
+        for v in self.channels_mut() {
             if let Value::Keys(keys) = v {
                 for k in keys.iter_mut() {
                     later(&mut k.frame);
@@ -618,6 +653,8 @@ pub struct MotionSample {
     pub rotation: f32,
     /// Degrees per frame.
     pub angular_velocity: f32,
+    /// 3D tilt about X and Y, degrees (zero when the chart has none).
+    pub tilt: [f32; 2],
     /// 0 to 1 through the chart's frames.
     pub progress: f32,
     /// Stage units travelled along the path since the first point.
@@ -661,6 +698,7 @@ pub struct ChartCurve {
     handles: Vec<([f32; 2], [f32; 2])>,
     scale: [Value; 2],
     rotation: Value,
+    tilt: Option<Box<[Value; 2]>>,
 }
 
 impl ChartCurve {
@@ -715,6 +753,7 @@ impl ChartCurve {
             handles,
             scale: chart.scale.clone(),
             rotation: chart.rotation.clone(),
+            tilt: chart.tilt.clone(),
         }
     }
 
@@ -791,6 +830,10 @@ impl ChartCurve {
             scale,
             rotation,
             angular_velocity,
+            tilt: self
+                .tilt
+                .as_ref()
+                .map_or([0.0; 2], |t| [t[0].at_f(frame), t[1].at_f(frame)]),
             progress,
             distance: self.distance(frame),
             transform,

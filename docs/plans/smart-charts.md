@@ -47,7 +47,7 @@ Timing { hold, ease_out, ease_in, spacing: Vec<[t, s]> }
   - That map is a monotone cubic through the spacing knots (Fritsch–Carlson), with end slopes set by ease out / ease in. Hold stays put until the next point.
   - Because timing is stored as fractions of arc length, reshaping the path keeps the spacing, and changing the spacing never moves the path.
   - Even spacing is the default, like a fresh chart before the animator marks favours.
-- **Scale and rotation** ([6], transform channels): independent `Value`s keyed by frame, evaluated against the same timeline. Rotation is in degrees, so multi-turn rotation is just a bigger number. 3D orientation (a quaternion internally, X/Y/Z in the UI) is added in Milestone 3 as an optional field; consumers decide what it means ([5]).
+- **Scale and rotation** ([6], transform channels): independent `Value`s keyed by frame, evaluated against the same timeline. Rotation is in degrees, so multi-turn rotation is just a bigger number. 3D orientation ([5]) is an optional `tilt: [Value; 2]` (X and Y degrees; rotation is Z), keyed like rotation. *Done.* It uses the same angles as a peg's 3D rotation rather than a quaternion, so a following peg tilts exactly as keyed and the Function view can show the curves. A quaternion stays possible for consumers that need to blend orientations. `MotionSample.tilt` carries it; a following peg takes it by default (Follow: Tilt), turning around the chart's current point.
 - **Keys versus in-betweens** ([8]):
   - A **Key** point is a key pose.
   - Moving the chart off its path on an in-between frame adds a **Breakdown** point. The path passes through it, but it's drawn differently and creates no drawing or exposure.
