@@ -1614,7 +1614,10 @@ impl SymphonyApp {
                 self.camera.apply_at(action, pointer);
                 self.drawing.apply_at(action, pointer);
             }
-            Action::ColourPicker => self.quick_colour.toggle(ctx),
+            Action::ColourPicker => {
+                let key = keymap::binding(self.profile, action).map(|b| b.key);
+                self.quick_colour.toggle(ctx, key);
+            }
             Action::Search => {
                 // Tab opens Search near the pointer. Text fields keep their focus handling.
                 if !ctx.text_edit_focused() && self.palette.is_none() {
@@ -5421,7 +5424,7 @@ impl SymphonyApp {
             }
             // SYMPHONY_SHOT_QUICK: the quick colour picker (Q) open.
             if std::env::var_os("SYMPHONY_SHOT_QUICK").is_some() && !self.quick_colour.is_open() {
-                self.quick_colour.toggle(&ctx);
+                self.quick_colour.toggle(&ctx, None);
             }
             // SYMPHONY_SHOT_SWATCH=<index>: the current colour.
             if let Some(sw) = std::env::var("SYMPHONY_SHOT_SWATCH")

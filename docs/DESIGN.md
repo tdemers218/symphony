@@ -504,7 +504,7 @@ and animation state.
 | Drawing and Camera | Harmony bindings | R Repaint, U Unpaint, Y Paint Unpainted, O Onion Skin, M Mirror, I Show selected points, V Preview art layers. Camera also uses Shift+R to toggle rendered effects. | Keep common drawing and preview actions near their names |
 | Timeline and Xsheet | Harmony bindings | A Auto-key, C Clone, D Duplicate, I Insert in-between, K Set key, Shift+K Delete key, L Add layer, N New drawing frame, V Layer visibility | Reuse letters in the timing context |
 | Node | Menus and Search | A Arrange, P Properties, R Reset view, V Render preview | Keep graph editing shortcuts inside the graph |
-| Quick colour picker | Search (Harmony has no such popup) | Q opens the current colour's editor at the pointer; Q or Esc closes it | Change colour without leaving the canvas, like other art apps |
+| Quick colour picker | Search (Harmony has no such popup) | Q opens a picker at the pointer, its marker under the pointer, that makes a new colour from the current one. Tap Q to keep it open (Q, Esc or a click outside closes it); hold Q to pick and let go to close | Pick a new colour without leaving the canvas, like other art apps; never repaints existing art |
 | Smart Charts (while a chart is edited) | Search and the point bar (Harmony has no Smart Charts) | Shift+B Key or breakdown, Shift+H Hold, [ and ] move the chart a frame earlier or later, arrows nudge the point (Shift: 10). Esc finishes. | Chart actions where the chart is, without the bar |
 
 

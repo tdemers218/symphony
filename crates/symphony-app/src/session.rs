@@ -3525,15 +3525,16 @@ impl Session {
         self.swatch = id;
     }
 
-    /// Add an opaque colour to the palette and make it current.
-    pub fn add_colour(&mut self, undo_name: &str, name: String, rgb: [u8; 3]) -> Id {
+    /// Add a colour to the palette and make it current.
+    pub fn add_colour(&mut self, undo_name: &str, name: String, rgba: [u8; 4]) -> Id {
+        let [r, g, b, opacity] = rgba;
         let id = self.doc.ids.fresh();
         let mut palette = self.doc.palette.clone();
         palette.swatches.push(symphony_core::palette::Swatch {
             id,
             name,
-            rgb,
-            opacity: 255,
+            rgb: [r, g, b],
+            opacity,
             protected: false,
             dynamics: None,
         });
@@ -3555,7 +3556,11 @@ impl Session {
             return;
         }
         let [r, g, b] = rgb;
-        self.add_colour("Pick screen colour", format!("#{r:02X}{g:02X}{b:02X}"), rgb);
+        self.add_colour(
+            "Pick screen colour",
+            format!("#{r:02X}{g:02X}{b:02X}"),
+            [r, g, b, 255],
+        );
     }
 
     pub fn rename_swatch(&mut self, id: Id, name: &str) {

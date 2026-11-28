@@ -424,14 +424,12 @@ fn wheel(ui: &mut egui::Ui, id: egui::Id, hsv: &mut Hsva) -> bool {
         centre + egui::vec2(sin, -cos) * (inner + outer) / 2.0,
         6.0,
     );
-    marker(
-        &painter,
-        Pos2::new(
-            square.left() + hsv.s * square.width(),
-            square.top() + (1.0 - hsv.v) * square.height(),
-        ),
-        5.0,
+    let at = Pos2::new(
+        square.left() + hsv.s * square.width(),
+        square.top() + (1.0 - hsv.v) * square.height(),
     );
+    marker(&painter, at, 5.0);
+    report_marker(ui, id, at);
     changed
 }
 
@@ -491,15 +489,19 @@ fn square_and_bar(ui: &mut egui::Ui, id: egui::Id, hsv: &mut Hsva) -> bool {
         Stroke::new(1.4, Color32::WHITE),
         egui::StrokeKind::Middle,
     );
-    marker(
-        &painter,
-        Pos2::new(
-            square.left() + hsv.s * square.width(),
-            square.top() + (1.0 - hsv.v) * square.height(),
-        ),
-        5.0,
+    let at = Pos2::new(
+        square.left() + hsv.s * square.width(),
+        square.top() + (1.0 - hsv.v) * square.height(),
     );
+    marker(&painter, at, 5.0);
+    report_marker(ui, id, at);
     changed
+}
+
+/// Where the picked colour's marker is, so the quick picker can open with
+/// it under the pointer.
+fn report_marker(ui: &egui::Ui, id: egui::Id, at: Pos2) {
+    ui.data_mut(|d| d.insert_temp(id.with("marker"), at));
 }
 
 /// One chip split in two: the new colour on the left, the colour the
@@ -678,6 +680,7 @@ fn perceptual(ui: &mut egui::Ui, id: egui::Id, rgba: &mut [u8; 4]) {
         }
     }
     let marker = at(lch.l, lch.c.min(MAX_CHROMA));
+    report_marker(ui, id, marker);
     ui.painter()
         .circle_stroke(marker, 5.0, Stroke::new(3.0, Color32::BLACK));
     ui.painter()
@@ -838,49 +841,118 @@ fn composite_preview(ui: &mut egui::Ui, rgba: [u8; 4]) {
     ui.data_mut(|d| d.insert_temp(state, (backdrop, mode)));
 }
 
-/// The quick colour picker: the editor for the current colour, summoned
-/// at the pointer with a shortcut (Q in the Symphony profile) and gone
-/// again with the same key, Escape or a click outside.
+/// The quick colour picker (Q in the Symphony profile): an editor at the
+/// pointer that makes a **new** colour, starting from the current one, so
+/// existing art never changes. Nothing is added until the colour changes.
+///
+/// Like holding Space for the Hand, the key works two ways: tap it and the
+/// picker stays until the key, Escape or a click outside closes it; hold
+/// it, pick, and let go to close.
 #[derive(Default)]
 pub struct Quick {
-    at: Option<Pos2>,
-    /// Its size last frame, to keep it on screen.
-    size: Option<egui::Vec2>,
+    open: Option<Open>,
+    /// Closed by the shortcut: finish up next frame.
+    closing: bool,
+    /// The colour this opening made, for naming it when the key closes it.
+    last_made: Option<symphony_core::id::Id>,
+}
+
+struct Open {
+    /// The pointer when it opened: the marker goes there.
+    at: Pos2,
+    /// The window's corner, fixed once the marker sits under the pointer.
+    corner: Option<Pos2>,
+    /// Frames spent placing it (unseen), at most a few.
+    placing: u8,
+    /// The key that opened it and when, while it may still be held.
+    key: Option<(egui::Key, f64)>,
+    /// The colour it started from.
+    base: Option<[u8; 4]>,
+    /// The swatch it made, once the colour changed.
+    made: Option<symphony_core::id::Id>,
+}
+
+/// Held longer than this (seconds), the key works as "hold to pick".
+const HOLD: f64 = 0.3;
+
+fn quick_id() -> egui::Id {
+    egui::Id::unique("quick-colour-picker")
 }
 
 impl Quick {
-    pub fn toggle(&mut self, ctx: &egui::Context) {
-        if self.at.is_some() {
-            self.close(ctx);
-        } else {
-            self.at = Some(
-                ctx.pointer_hover_pos()
-                    .unwrap_or_else(|| ctx.content_rect().center()),
-            );
+    /// Open at the pointer, or close if open. `key` is the shortcut that
+    /// did it (None from Search), for hold-to-pick.
+    pub fn toggle(&mut self, ctx: &egui::Context, key: Option<egui::Key>) {
+        // Key repeat while the opening press is still held isn't a new press.
+        if self.open.as_ref().is_some_and(|o| o.key.is_some()) {
+            return;
         }
+        if self.open.take().is_some() {
+            // Named and remembered on the next frame, which has the session.
+            self.closing = true;
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        self.open = Some(Open {
+            at: ctx
+                .pointer_hover_pos()
+                .unwrap_or_else(|| ctx.content_rect().center()),
+            corner: None,
+            placing: 0,
+            key: key.map(|k| (k, now)),
+            base: None,
+            made: None,
+        });
     }
 
     pub fn is_open(&self) -> bool {
-        self.at.is_some()
+        self.open.is_some()
     }
 
-    fn close(&mut self, ctx: &egui::Context) {
-        self.at = None;
+    /// Close, naming the new colour by its final value.
+    fn finish(&mut self, ctx: &egui::Context, s: &mut crate::session::Session) {
+        let id = quick_id();
+        self.last_made = None;
+        if let Some(made) = self.open.take().and_then(|o| o.made) {
+            let [r, g, b, a] = s.doc.swatch_rgba(made);
+            s.rename_swatch(made, &format!("#{r:02X}{g:02X}{b:02X}"));
+            closed(ctx, id, [r, g, b, a]);
+        } else {
+            ctx.data_mut(|d| d.remove::<[u8; 4]>(id.with("before")));
+        }
         dropper::cancel(ctx);
     }
 
     pub fn ui(&mut self, ctx: &egui::Context, s: &mut crate::session::Session) {
-        let Some(at) = self.at else { return };
-        let id = egui::Id::unique("quick-colour-picker");
+        if std::mem::take(&mut self.closing) {
+            if let Some(made) = self.last_made.take() {
+                let [r, g, b, a] = s.doc.swatch_rgba(made);
+                s.rename_swatch(made, &format!("#{r:02X}{g:02X}{b:02X}"));
+                closed(ctx, quick_id(), [r, g, b, a]);
+            }
+            dropper::cancel(ctx);
+        }
+        let Some(open) = &mut self.open else { return };
+        let id = quick_id();
         let picking = dropper::active(ctx);
+        // Hold to pick: letting go of a held key closes; a tap leaves it open.
+        if let Some((key, since)) = open.key {
+            let (down, now) = ctx.input(|i| (i.key_down(key), i.time));
+            if !down {
+                open.key = None;
+                if now - since > HOLD && !picking {
+                    self.finish(ctx, s);
+                    return;
+                }
+            }
+        }
         if !picking && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.close(ctx);
-            closed(ctx, id, s.doc.swatch_rgba(s.swatch));
+            self.finish(ctx, s);
             return;
         }
+        let screen = ctx.content_rect();
         // A sheet over the workspace takes the click that closes the picker,
         // so it doesn't also draw on the canvas.
-        let screen = ctx.content_rect();
         if !picking {
             let dismissed = egui::Area::new(id.with("sheet"))
                 .order(egui::Order::Foreground)
@@ -891,52 +963,81 @@ impl Quick {
                 })
                 .inner;
             if dismissed {
-                self.close(ctx);
-                closed(ctx, id, s.doc.swatch_rgba(s.swatch));
+                self.finish(ctx, s);
                 return;
             }
         }
-        let name = s
+        let Some(open) = &mut self.open else { return };
+        let base = *open.base.get_or_insert_with(|| s.doc.swatch_rgba(s.swatch));
+        let mut rgba = open.made.map_or(base, |made| s.doc.swatch_rgba(made));
+        let from = s
             .doc
             .palette
             .get(s.swatch)
             .map_or_else(String::new, |sw| sw.name.clone());
-        let mut rgba = s.doc.swatch_rgba(s.swatch);
-        // Open centred on the pointer, kept on screen.
-        let size = self.size.unwrap_or(egui::vec2(PICKER + 16.0, 560.0));
-        // Clamped by hand: on the first frames the window can be smaller
-        // than the picker (or have no size yet), where f32::clamp panics.
-        let fit = |want: f32, low: f32, high: f32| want.min(high).max(low);
-        let pos = Pos2::new(
-            fit(
-                at.x - size.x / 2.0,
-                screen.left() + 8.0,
-                screen.right() - size.x - 8.0,
-            ),
-            fit(
-                at.y - 120.0,
-                screen.top() + 8.0,
-                screen.bottom() - size.y - 8.0,
-            ),
-        );
+        let made = open.made;
+        // The first frames lay out unseen to find the marker, moving the
+        // window until the marker sits under the pointer (egui's first pass
+        // over a new area only measures it, so one look isn't enough).
+        const PLACING: u8 = 4;
+        let placing = open.placing < PLACING;
+        let corner = open.corner.unwrap_or(open.at);
         let area = egui::Area::new(id)
             .order(egui::Order::Foreground)
-            .fixed_pos(pos)
+            .fixed_pos(corner)
             .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.strong(&name);
-                        ui.weak("· current colour");
+                if placing {
+                    ui.multiply_opacity(0.0);
+                }
+                egui::Frame::popup(ui.style())
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.strong("New colour");
+                            match made {
+                                Some(_) => ui.weak("· added to the palette"),
+                                None => ui.weak(format!("· from {from}")),
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "Picking here adds a new colour and leaves the others, and the \
+                             art painted with them, as they are",
+                        );
+                        body(ui, id, &mut rgba, true)
                     })
-                    .response
-                    .on_hover_text("Changes here recolour everything painted with this swatch");
-                    body(ui, id, &mut rgba, true)
-                })
+                    .inner
             });
         ctx.move_to_top(area.response.layer_id);
-        self.size = Some(area.response.rect.size());
-        if area.inner.inner {
-            s.set_swatch(s.swatch, rgba);
+        if placing {
+            open.placing += 1;
+            let marker = ctx.data(|d| d.get_temp::<Pos2>(id.with("marker")));
+            let size = area.response.rect.size();
+            let want = marker.map_or(open.at - size / 2.0, |m| corner + (open.at - m));
+            // Kept on screen even if that moves the marker off the pointer.
+            // Clamped by hand: on the first frames the window can be smaller
+            // than the picker, where f32::clamp panics.
+            let fit = |v: f32, low: f32, high: f32| v.min(high).max(low);
+            let next = Pos2::new(
+                fit(want.x, screen.left() + 8.0, screen.right() - size.x - 8.0),
+                fit(want.y, screen.top() + 8.0, screen.bottom() - size.y - 8.0),
+            );
+            if open.corner.is_some_and(|c| (c - next).length() < 0.5) {
+                open.placing = PLACING;
+            }
+            open.corner = Some(next);
+            ctx.request_repaint();
+            return;
+        }
+        if area.inner {
+            match open.made {
+                Some(made) => s.set_swatch(made, rgba),
+                None => {
+                    let [r, g, b, _] = rgba;
+                    open.made =
+                        Some(s.add_colour("Add colour", format!("#{r:02X}{g:02X}{b:02X}"), rgba));
+                }
+            }
+            self.last_made = open.made;
         }
     }
 }

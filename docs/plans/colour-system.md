@@ -153,7 +153,10 @@ default, **Square** (Photoshop's big square and hue bar), and
 Perceptual. Under it: a new/current split chip, a hex field, a dropper
 that samples the window (via a screenshot), HSB/RGB sliders and recent
 colours. The blend preview moved into a closed section. **Q** (Symphony
-profile) summons the same editor for the current colour at the pointer.
+profile) summons it at the pointer with the marker under the pointer, and
+it makes a **new** swatch from the current colour (Tristan: never edit the
+current one from Q). Tap to keep it open, hold to pick and release to
+close, like Space for the Hand.
 Shadow/highlight suggestions are still to come.
 
 ### Phase 1: foundation ✅ c4966f8, 241b6d2

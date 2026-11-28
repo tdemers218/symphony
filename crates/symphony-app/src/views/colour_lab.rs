@@ -243,7 +243,11 @@ fn picked_body(ui: &mut egui::Ui, s: &mut Session, state: &mut LabState) {
                 .on_hover_text("Add this colour as a flat swatch and make it current")
                 .clicked()
             {
-                s.add_colour("Add Lab colour", hex(colour), colour);
+                s.add_colour(
+                    "Add Lab colour",
+                    hex(colour),
+                    [colour[0], colour[1], colour[2], 255],
+                );
             }
         });
     });
@@ -296,7 +300,7 @@ fn picked_body(ui: &mut egui::Ui, s: &mut Session, state: &mut LabState) {
                     s.add_colour(
                         "Add Lab colour",
                         format!("{} {}", mode.title(), hex(r.colour)),
-                        r.colour,
+                        [r.colour[0], r.colour[1], r.colour[2], 255],
                     );
                 }
                 ui.end_row();

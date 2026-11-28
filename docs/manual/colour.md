@@ -59,11 +59,26 @@ Symphony remembers the layout and the slider type you used last.
 
 ### Quick colour picker
 
-Press `Q` (Symphony profile) to open the editor for the current colour
-right at the pointer, without going to the Colour view. Press `Q` again,
-press `Escape` or click outside to close it; the click that closes it
-doesn't draw. In the Harmony profile it has no shortcut: search (`Tab`)
-for "Colour picker", or give it one.
+Press `Q` (Symphony profile) to pick a **new colour** without going to the
+Colour view. The picker opens at the pointer, starting from the current
+colour, with the pointer already on the colour's marker, so a small drag
+gives a nearby shade.
+
+As soon as you change the colour, Symphony adds it to the palette as a
+new swatch and makes it current; further changes adjust that new swatch.
+The colour you started from, and everything painted with it, stays as it
+was. Close without changing anything and nothing is added. The new
+swatch is named after its hex value; rename it in the Colour view.
+
+`Q` works like holding `Space` for the Hand:
+
+- **Tap** `Q`: the picker stays open. Press `Q` again, press `Escape` or
+  click outside to close it. The click that closes it doesn't draw.
+- **Hold** `Q`, drag to pick, and let go: it closes when you release the
+  key.
+
+In the Harmony profile it has no shortcut: search (`Tab`) for "Colour
+picker", or give it one.
 
 ### Three kinds of opacity
 

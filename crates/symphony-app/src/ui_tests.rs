@@ -2969,7 +2969,7 @@ fn the_colour_lab_renders_and_explains_a_picked_shadow() {
 }
 
 #[test]
-fn the_quick_colour_picker_edits_the_current_colour_and_escape_closes_it() {
+fn the_quick_colour_picker_makes_a_new_colour_and_escape_closes_it() {
     use crate::views::colour_picker::Quick;
     struct Q {
         s: Session,
@@ -2988,11 +2988,14 @@ fn the_quick_colour_picker_edits_the_current_colour_and_escape_closes_it() {
             },
         );
     let ctx = h.ctx.clone();
-    h.state_mut().quick.toggle(&ctx);
-    h.run_steps(2);
+    let current = h.state().s.swatch;
+    let before = h.state().s.doc.swatch_rgba(current);
+    let count = h.state().s.doc.palette.swatches.len();
+    h.state_mut().quick.toggle(&ctx, None);
+    h.run_steps(3);
     assert!(h.state().quick.is_open());
-    let before = h.state().s.doc.swatch_rgba(h.state().s.swatch);
-    // Type a hex colour.
+    // Opening adds nothing.
+    assert_eq!(h.state().s.doc.palette.swatches.len(), count);
     let [r, g, b, _] = before;
     let field = format!("#{r:02X}{g:02X}{b:02X}");
     h.get_all_by_value(&field)
@@ -3006,14 +3009,24 @@ fn the_quick_colour_picker_edits_the_current_colour_and_escape_closes_it() {
         .expect("hex field")
         .type_text("#FF8000");
     h.run_steps(2);
-    let after = h.state().s.doc.swatch_rgba(h.state().s.swatch);
-    assert_eq!(after, [255, 128, 0, before[3]]);
-    // Escape leaves the field first, then closes the picker.
+    // A new swatch, now current; the old one and its art are untouched.
+    let s = &h.state().s;
+    assert_eq!(s.doc.palette.swatches.len(), count + 1);
+    assert_ne!(s.swatch, current);
+    assert_eq!(s.doc.swatch_rgba(s.swatch), [255, 128, 0, before[3]]);
+    assert_eq!(s.doc.swatch_rgba(current), before);
+    // Escape leaves the field, then closes the picker.
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert!(!h.state().quick.is_open());
+    let s = &h.state().s;
+    assert_eq!(s.doc.palette.swatches.len(), count + 1);
+    assert_eq!(
+        s.doc.palette.get(s.swatch).map(|sw| sw.name.as_str()),
+        Some("#FF8000")
+    );
 }
 
 #[test]
@@ -3039,8 +3052,10 @@ fn opening_the_colour_editor_never_changes_the_colour() {
             let id = h.state().0.swatch;
             h.state_mut().0.set_swatch(id, [63, 112, 221, 130]);
             let before = h.state().0.doc.swatch_rgba(id);
-            h.state_mut().1.toggle(&ctx);
+            let count = h.state().0.doc.palette.swatches.len();
+            h.state_mut().1.toggle(&ctx, None);
             h.run_steps(4);
+            assert_eq!(h.state().0.doc.palette.swatches.len(), count);
             assert_eq!(
                 h.state().0.doc.swatch_rgba(id),
                 before,
@@ -3048,4 +3063,74 @@ fn opening_the_colour_editor_never_changes_the_colour() {
             );
         }
     }
+}
+
+fn quick_rig() -> Harness<'static, (Session, crate::views::colour_picker::Quick)> {
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(900.0, 800.0))
+        // Real frame times, so a tap is shorter than the hold time.
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, (s, quick): &mut (Session, crate::views::colour_picker::Quick)| {
+                let ctx = ui.ctx().clone();
+                quick.ui(&ctx, s);
+            },
+            (Session::new_scene(), Default::default()),
+        );
+    h.run_steps(1);
+    h
+}
+
+#[test]
+fn the_quick_picker_opens_with_the_colour_under_the_pointer() {
+    let mut h = quick_rig();
+    let pointer = egui::pos2(500.0, 420.0);
+    h.hover_at(pointer);
+    h.run_steps(1);
+    let ctx = h.ctx.clone();
+    h.state_mut().1.toggle(&ctx, None);
+    h.run_steps(4);
+    let marker = ctx
+        .data(|d| d.get_temp::<egui::Pos2>(egui::Id::unique("quick-colour-picker").with("marker")))
+        .expect("marker");
+    assert!(
+        (marker - pointer).length() < 1.5,
+        "{marker:?} vs {pointer:?}"
+    );
+}
+
+#[test]
+fn holding_the_key_picks_and_letting_go_closes() {
+    let key = egui::Key::Q;
+    let press = |h: &mut Harness<'static, (Session, crate::views::colour_picker::Quick)>,
+                 pressed: bool| {
+        h.event(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+    };
+    // A tap leaves it open.
+    let mut h = quick_rig();
+    let ctx = h.ctx.clone();
+    press(&mut h, true);
+    h.state_mut().1.toggle(&ctx, Some(key));
+    h.run_steps(1);
+    press(&mut h, false);
+    h.run_steps(2);
+    assert!(h.state().1.is_open(), "a tap keeps it open");
+    // Held past the hold time, letting go closes it.
+    let mut h = quick_rig();
+    let ctx = h.ctx.clone();
+    press(&mut h, true);
+    h.state_mut().1.toggle(&ctx, Some(key));
+    // Key repeat while held doesn't close it.
+    h.state_mut().1.toggle(&ctx, Some(key));
+    h.run_steps(30);
+    assert!(h.state().1.is_open());
+    press(&mut h, false);
+    h.run_steps(2);
+    assert!(!h.state().1.is_open(), "letting go of a held key closes it");
 }
