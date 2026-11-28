@@ -63,6 +63,9 @@ pub struct CanvasState {
     /// Drawings bent by Mesh Warps, by drawing: rebuilt only when the
     /// drawing or the warp changes (key), never every frame.
     bent: std::collections::HashMap<Id, (u64, std::sync::Arc<symphony_core::stroke::Drawing>)>,
+    /// Lines of camera-facing layers carried onto the facing plane, by
+    /// (layer, drawing): rebuilt only when the drawing or the planes change.
+    facing: std::collections::HashMap<(usize, Id), (u64, std::sync::Arc<FacingStrokes>)>,
 }
 
 impl Default for CanvasState {
@@ -87,6 +90,7 @@ impl Default for CanvasState {
             rig_edit: Default::default(),
             text: None,
             bent: Default::default(),
+            facing: Default::default(),
         }
     }
 }
@@ -863,6 +867,69 @@ fn bent_drawing(
     bent
 }
 
+/// A drawing's lines as seen on a camera-facing layer, in step with
+/// `Drawing::strokes`: `Some` for a line carried onto the facing plane
+/// (drawn with the facing transform), `None` for one drawn as it is.
+type FacingStrokes = Vec<Option<Stroke>>;
+
+/// A key for a projection: the scene version and the exact path matrix.
+fn projection_key(version: u64, path: Affine) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    version.hash(&mut h);
+    for v in [path.a, path.b, path.c, path.d, path.tx, path.ty] {
+        v.to_bits().hash(&mut h);
+    }
+    h.finish()
+}
+
+/// `st` carried onto a facing plane. A plain line's id is tagged by `key`:
+/// its mesh cache trusts ids while the scene is unedited, so each
+/// projection needs its own (as with bent drawings). Textured lines keep
+/// their id: their caches are keyed by content, and the id is what shows
+/// the previous image while a new one renders.
+fn project_tagged(st: &Stroke, plane: Affine, facing: Affine, key: u64) -> Option<Stroke> {
+    let (projected, _) = symphony_vector::projected_stroke(st, plane, Some(facing));
+    let std::borrow::Cow::Owned(mut projected) = projected else {
+        return None;
+    };
+    if projected.texture.is_none() {
+        projected.id = Id(st.id.0 ^ ((key >> 1) | (1 << 63)));
+    }
+    Some(projected)
+}
+
+/// The lines of `d` on a camera-facing layer, rebuilt only when the
+/// drawing (the scene version) or the plane / facing matrices change, so
+/// an unchanged frame clones nothing and a changed one never reuses a
+/// stale line mesh. `plane` and `facing` are without the view's pan and
+/// zoom, so panning never rebuilds them.
+fn facing_strokes(
+    cache: &mut std::collections::HashMap<(usize, Id), (u64, std::sync::Arc<FacingStrokes>)>,
+    version: u64,
+    layer: usize,
+    d: &symphony_core::stroke::Drawing,
+    plane: Affine,
+    facing: Affine,
+) -> std::sync::Arc<FacingStrokes> {
+    let key = facing
+        .inverse()
+        .map_or(0, |inverse| projection_key(version, inverse.compose(plane)));
+    if let Some((k, strokes)) = cache.get(&(layer, d.id)) {
+        if *k == key && strokes.len() == d.strokes.len() {
+            return strokes.clone();
+        }
+    }
+    let strokes: FacingStrokes = d
+        .strokes
+        .iter()
+        .map(|st| project_tagged(st, plane, facing, key))
+        .collect();
+    let strokes = std::sync::Arc::new(strokes);
+    cache.insert((layer, d.id), (key, strokes.clone()));
+    strokes
+}
+
 fn paint_stroke(
     painter: &egui::Painter,
     cache: &mut super::textured::Cache,
@@ -1635,6 +1702,10 @@ pub fn ui(
         state
             .bent
             .retain(|d, _| warps.iter().any(|(w, _, _)| w == d));
+        state.facing.retain(|(layer, d), _| {
+            facing_planes.iter().any(|(l, _)| l == layer)
+                && items.iter().any(|(l, i, _)| l == layer && i == d)
+        });
         for (layer, d, m) in &items {
             let Some(original) = s.doc.drawings.get(d) else {
                 continue;
@@ -1656,17 +1727,22 @@ pub fn ui(
             // Under a Mesh Warp: the bent copy, drawn with the warp's
             // outer transform (on the same plane).
             let bent_copy;
-            let (dr, world) = match warps.iter().find(|(w, _, _)| w == d) {
+            let (dr, local) = match warps.iter().find(|(w, _, _)| w == d) {
                 Some((_, warp, stage)) => {
                     bent_copy = bent_drawing(&mut state.bent, s.doc.version, original, warp);
-                    (&*bent_copy, view.compose(*stage).compose(warp.outer()))
+                    (&*bent_copy, stage.compose(warp.outer()))
                 }
-                None => (original, world),
+                None => (original, *m),
             };
+            let world = view.compose(local);
+            // A camera-facing layer: its lines carried onto the facing
+            // plane, cached (never re-projected on an unchanged frame).
             let facing = facing_planes
                 .iter()
                 .find(|(index, _)| index == layer)
-                .map(|(_, m)| view.compose(*m));
+                .map(|(_, f)| *f);
+            let facing_lines = facing
+                .map(|f| facing_strokes(&mut state.facing, s.doc.version, *layer, dr, local, f));
             // The sketch always shows (faint unless it's being drawn on).
             let sketch = s.sketch_opacity();
             for art in ArtLayer::STACK {
@@ -1697,11 +1773,12 @@ pub fn ui(
                         .vectors
                         .paint_fill(&painter, f, colour(s, f.swatch), transform);
                 }
-                for st in dr
+                for (index, st) in dr
                     .strokes
                     .iter()
-                    .filter(|st| st.art == art && st.kind != StrokeKind::Invisible)
-                    .filter(|st| {
+                    .enumerate()
+                    .filter(|(_, st)| st.art == art && st.kind != StrokeKind::Invisible)
+                    .filter(|(_, st)| {
                         !state
                             .text
                             .as_ref()
@@ -1709,22 +1786,40 @@ pub fn ui(
                             .is_some_and(|object| object.glyphs.contains(&st.id))
                     })
                 {
-                    let transform = match preview {
-                        Some(l)
-                            if s.selection.drawing == Some(*d)
-                                && s.selection.strokes.contains(&st.id) =>
-                        {
-                            world.compose(l)
+                    let previewed = preview.filter(|_| {
+                        s.selection.drawing == Some(*d) && s.selection.strokes.contains(&st.id)
+                    });
+                    // Facing Camera: the cached projection, or (while the
+                    // Select preview moves it) one for this preview only.
+                    let live;
+                    let (line, transform) = match (facing, previewed) {
+                        (Some(f), Some(l)) => {
+                            let plane = local.compose(l);
+                            let key = f
+                                .inverse()
+                                .map_or(0, |inv| projection_key(s.doc.version, inv.compose(plane)));
+                            live = project_tagged(st, plane, f, key);
+                            match &live {
+                                Some(p) => (p, view.compose(f)),
+                                None => (st, view.compose(plane)),
+                            }
                         }
-                        _ => world,
+                        (Some(f), None) => match facing_lines
+                            .as_ref()
+                            .and_then(|lines| lines.get(index))
+                            .and_then(Option::as_ref)
+                        {
+                            Some(p) => (p, view.compose(f)),
+                            None => (st, world),
+                        },
+                        (None, Some(l)) => (st, world.compose(l)),
+                        (None, None) => (st, world),
                     };
-                    let (projected, transform) =
-                        symphony_vector::projected_stroke(st, transform, facing);
                     paint_stroke(
                         &painter,
                         &mut state.strokes,
                         &s.doc.textures,
-                        &projected,
+                        line,
                         colour(s, st.swatch),
                         transform,
                     );
@@ -2645,5 +2740,63 @@ mod zoom_key_tests {
         // Outside the canvas: the centre stays put instead.
         st.apply_at(Action::ZoomOut, Some(Pos2::new(2000.0, 2000.0)));
         assert!((st.zoom - 1.25).abs() < 1e-4);
+    }
+
+    /// Face Camera lines are projected once and reused while nothing
+    /// changes; a new tilt (or an edit) projects them again under new ids,
+    /// so the line mesh cache can never show the old projection.
+    #[test]
+    fn facing_lines_are_cached_until_the_projection_changes() {
+        let p = |x: f32, y: f32| Point {
+            x,
+            y,
+            pressure: 1.0,
+            width_offset: 0.0,
+            pen: Default::default(),
+        };
+        let line = Stroke {
+            id: Id(7),
+            kind: StrokeKind::Brush,
+            art: Default::default(),
+            swatch: Id(0),
+            min_width: 2.0,
+            max_width: 2.0,
+            points: vec![p(0.0, 0.0), p(50.0, 10.0)],
+            tips: Default::default(),
+            texture: None,
+            shape: Vec::new(),
+        };
+        let d = symphony_core::stroke::Drawing {
+            id: Id(2),
+            column: Id(3),
+            name: "d".into(),
+            strokes: vec![line],
+            fills: Vec::new(),
+            image: None,
+            text: Vec::new(),
+        };
+        let mut cache = Default::default();
+        // A plane squashed sideways (tilted), facing an upright plane.
+        let plane = Affine::scale(0.5, 1.0);
+        let facing = Affine::IDENTITY;
+        let first = facing_strokes(&mut cache, 4, 0, &d, plane, facing);
+        let again = facing_strokes(&mut cache, 4, 0, &d, plane, facing);
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &again),
+            "an unchanged frame reuses it"
+        );
+        let projected = first[0].as_ref().expect("a plain line is projected");
+        assert_ne!(projected.id, d.strokes[0].id);
+        assert_eq!(projected.points[1].x, 25.0);
+
+        let tilted = facing_strokes(&mut cache, 4, 0, &d, Affine::scale(0.25, 1.0), facing);
+        let moved = tilted[0].as_ref().unwrap();
+        assert_ne!(moved.id, projected.id, "a new projection gets a new id");
+        assert_eq!(moved.points[1].x, 12.5);
+        let edited = facing_strokes(&mut cache, 5, 0, &d, Affine::scale(0.25, 1.0), facing);
+        assert!(
+            !std::sync::Arc::ptr_eq(&edited, &tilted),
+            "an edit rebuilds it"
+        );
     }
 }
