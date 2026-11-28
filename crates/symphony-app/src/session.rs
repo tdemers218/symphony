@@ -186,6 +186,7 @@ fn densify_near(points: &[Point], at: [f32; 2], radius: f32, step: f32) -> Vec<P
                     x: p.x + (q.x - p.x) * t,
                     y: p.y + (q.y - p.y) * t,
                     pressure: p.pressure + (q.pressure - p.pressure) * t,
+                    width_offset: p.width_offset + (q.width_offset - p.width_offset) * t,
                     pen: symphony_core::stroke::Pen::lerp(p.pen, q.pen, t),
                 });
             }
@@ -312,7 +313,7 @@ pub fn stencil_from(stroke: &Stroke) -> Option<Stencil> {
     if total <= 0.0 {
         return None;
     }
-    let width = |i: usize| stroke.width_at(stroke.points[i].pressure);
+    let width = |i: usize| stroke.point_width(&stroke.points[i]);
     let mut out = [0.0; STENCIL_SAMPLES];
     for (k, slot) in out.iter_mut().enumerate() {
         let target = total * k as f32 / (STENCIL_SAMPLES - 1) as f32;
@@ -342,6 +343,31 @@ pub struct PegValues {
     pub scale_y: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OnionAlignment {
+    pub offset: [f32; 2],
+    pub rotation: f32,
+    pub scale: f32,
+}
+
+impl Default for OnionAlignment {
+    fn default() -> Self {
+        Self {
+            offset: [0.0; 2],
+            rotation: 0.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl OnionAlignment {
+    pub fn transform(self) -> Affine {
+        Affine::translate(self.offset[0], self.offset[1])
+            .compose(Affine::rotate_deg(self.rotation))
+            .compose(Affine::scale(self.scale, self.scale))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Onion {
     pub on: bool,
@@ -349,6 +375,8 @@ pub struct Onion {
     pub after: u32,
     /// Opacity of the nearest onion drawing; farther ones fade from it.
     pub opacity: f32,
+    pub alignment: [OnionAlignment; 2],
+    pub alignment_edit: Option<([OnionAlignment; 2], usize)>,
 }
 
 /// Strokes picked with the Select tool, in one drawing.
@@ -365,6 +393,46 @@ pub enum InsertExposure {
     Duplicate,
     Clone,
     Reuse(Id),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LineSculpt {
+    #[default]
+    Push,
+    Smooth,
+    SmoothPressure,
+    Thicken,
+    Thin,
+}
+
+impl LineSculpt {
+    pub const ALL: [Self; 5] = [
+        Self::Push,
+        Self::Smooth,
+        Self::SmoothPressure,
+        Self::Thicken,
+        Self::Thin,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Push => "Push lines",
+            Self::Smooth => "Smooth lines",
+            Self::SmoothPressure => "Smooth line pressure",
+            Self::Thicken => "Thicken lines",
+            Self::Thin => "Thin lines",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Push => "line.sculpt.push",
+            Self::Smooth => "line.sculpt.smooth",
+            Self::SmoothPressure => "line.sculpt.smooth-pressure",
+            Self::Thicken => "line.sculpt.thicken",
+            Self::Thin => "line.sculpt.thin",
+        }
+    }
 }
 
 pub struct Session {
@@ -399,6 +467,7 @@ pub struct Session {
     /// (stroke, point index).
     pub line_edit_radius: f32,
     pub line_edit_strength: f32,
+    pub line_sculpt: LineSculpt,
     pub point_reduction: f32,
     pub show_selected_points: bool,
     pub cutter_mode: bool,
@@ -409,6 +478,7 @@ pub struct Session {
     /// Pressure response, as a gamma (E4.1). 1 = linear.
     pub pressure_gamma: f32,
     pub onion: Onion,
+    pub guides: crate::views::guides::Guides,
     /// Harmony's Brush Size Cursor preference (DESIGN D8.11).
     pub brush_size_cursor: bool,
     /// Symphony profile: Brush and Pencil are two modes of one Pen tool
@@ -533,6 +603,7 @@ impl Session {
             erase_all_frames: false,
             line_edit_radius: 40.0,
             line_edit_strength: 1.0,
+            line_sculpt: LineSculpt::Push,
             point_reduction: 1.0,
             show_selected_points: false,
             cutter_mode: false,
@@ -545,7 +616,10 @@ impl Session {
                 before: 1,
                 after: 1,
                 opacity: 0.45,
+                alignment: Default::default(),
+                alignment_edit: None,
             },
+            guides: Default::default(),
             brush_size_cursor: true,
             pen_modes: false,
             light_table: false,
@@ -589,6 +663,7 @@ impl Session {
                         x: cx + r * t.cos(),
                         y: cy + r * t.sin(),
                         pressure: 0.55 + 0.45 * (t * 1.5).sin().abs(),
+                        width_offset: 0.0,
                         pen: Default::default(),
                     }
                 })
@@ -601,6 +676,7 @@ impl Session {
                     x,
                     y,
                     pressure: 0.3 + 0.7 * ((i as f32) * 0.9).sin().abs(),
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect()
@@ -715,6 +791,12 @@ impl Session {
     }
 
     // ---- Undo ------------------------------------------------------------
+
+    pub fn begin_onion_alignment(&mut self) {
+        self.onion.on = true;
+        self.onion.alignment_edit =
+            Some((self.onion.alignment, usize::from(self.onion.before == 0)));
+    }
 
     pub fn undo(&mut self) {
         // The status bar says what was undone and how much history is left.
@@ -2083,6 +2165,57 @@ impl Session {
         }
     }
 
+    pub fn set_selected_peg_tilt(&mut self, enabled: bool, angles: [f32; 2]) {
+        if self
+            .doc
+            .column(self.selected)
+            .is_some_and(|column| column.locked)
+        {
+            return;
+        }
+        let Some(id) = self.transform_peg_id(self.selected) else {
+            return;
+        };
+        let Some(mut peg) = self.transform_peg(self.selected).cloned() else {
+            return;
+        };
+        peg.tilt_enabled = enabled;
+        if enabled {
+            let tilt = peg
+                .tilt
+                .get_or_insert_with(|| Box::new([Value::default(), Value::default()]));
+            for (value, angle) in tilt.iter_mut().zip(angles) {
+                if value.at(self.frame) != angle {
+                    match value {
+                        Value::Constant(current) if !self.animate => *current = angle,
+                        _ => value.set_key(self.frame, angle),
+                    }
+                }
+            }
+        }
+        self.set_peg_by_id(id, peg);
+    }
+
+    pub fn set_selected_peg_face_camera(&mut self, enabled: bool) {
+        if self
+            .doc
+            .column(self.selected)
+            .is_some_and(|column| column.locked)
+        {
+            return;
+        }
+        let Some(id) = self.transform_peg_id(self.selected) else {
+            return;
+        };
+        let Some(mut peg) = self.transform_peg(self.selected).cloned() else {
+            return;
+        };
+        peg.face_camera = enabled;
+        self.end_gesture();
+        self.set_peg_by_id(id, peg);
+        self.end_gesture();
+    }
+
     // ---- Transform tool (layers, through their pegs) ----------------------
 
     /// Change the selected layer's peg in one gesture step. In Animate mode
@@ -2143,6 +2276,35 @@ impl Session {
                 self.set_peg_by_id(id, p);
             }
         }
+    }
+
+    /// Move the pivot while compensating the peg's translation at this frame.
+    pub fn relocate_peg_pivot(&mut self, layer: usize, pivot: (f32, f32)) {
+        let Some(id) = self.transform_peg_id(layer) else {
+            return;
+        };
+        let Some(mut peg) = self.transform_peg(layer).cloned() else {
+            return;
+        };
+        if peg.pivot == pivot {
+            return;
+        }
+        let before = peg.transform_at(self.frame);
+        peg.pivot = pivot;
+        let after = peg.transform_at(self.frame);
+        for (value, correction) in [
+            (&mut peg.x, before.tx - after.tx),
+            (&mut peg.y, before.ty - after.ty),
+        ] {
+            if correction.abs() > 1e-5 {
+                let corrected = value.at(self.frame) + correction;
+                match value {
+                    Value::Constant(current) if !self.animate => *current = corrected,
+                    _ => value.set_key(self.frame, corrected),
+                }
+            }
+        }
+        self.set_peg_by_id(id, peg);
     }
 
     // ---- Timing ----------------------------------------------------------
@@ -2384,6 +2546,43 @@ impl Session {
 
     /// Make room for new poses after the playhead, holding each visible
     /// exposure until the animator creates a new drawing in an inserted cell.
+    pub fn save_bookmark(&mut self, mut bookmark: symphony_core::doc::Bookmark) {
+        let before = self.doc.bookmarks.clone();
+        let mut after = before.clone();
+        if let Some(existing) = after.iter_mut().find(|entry| entry.id == bookmark.id) {
+            *existing = bookmark;
+        } else {
+            bookmark.id = self.doc.ids.fresh();
+            after.push(bookmark);
+        }
+        self.change_bookmarks(before, after);
+    }
+
+    pub fn remove_bookmark(&mut self, id: Id) {
+        let before = self.doc.bookmarks.clone();
+        let after = before
+            .iter()
+            .filter(|entry| entry.id != id)
+            .cloned()
+            .collect();
+        self.change_bookmarks(before, after);
+    }
+
+    fn change_bookmarks(
+        &mut self,
+        before: Vec<symphony_core::doc::Bookmark>,
+        mut after: Vec<symphony_core::doc::Bookmark>,
+    ) {
+        after.sort_by_key(|entry| (entry.start, entry.end, entry.id));
+        if before != after {
+            self.history.apply(
+                &mut self.doc,
+                "Edit bookmarks",
+                vec![Edit::SetBookmarks { before, after }],
+            );
+        }
+    }
+
     pub fn insert_inbetweens(&mut self, count: u32) {
         let before = self.length();
         if count == 0 || count > 100_000u32.saturating_sub(before) {
@@ -2405,6 +2604,24 @@ impl Session {
                     vec![held; count as usize],
                 ));
             }
+        }
+        if self
+            .doc
+            .bookmarks
+            .iter()
+            .any(|bookmark| bookmark.end >= from)
+        {
+            let before = self.doc.bookmarks.clone();
+            let mut after = before.clone();
+            for bookmark in &mut after {
+                if bookmark.start >= from {
+                    bookmark.start = bookmark.start.saturating_add(count);
+                }
+                if bookmark.end >= from {
+                    bookmark.end = bookmark.end.saturating_add(count);
+                }
+            }
+            edits.push(Edit::SetBookmarks { before, after });
         }
         let before_camera = &self.doc.camera_motion;
         let mut after_camera = before_camera.clone();
@@ -2474,6 +2691,7 @@ impl Session {
                         .into_iter()
                         .chain(peg.scale_x.iter_mut())
                         .chain(peg.scale_y.iter_mut())
+                        .chain(peg.tilt.iter_mut().flat_map(|angles| angles.iter_mut()))
                     {
                         shift(value);
                     }
@@ -3182,10 +3400,10 @@ impl Session {
     // ---- Line Editor ------------------------------------------------------
 
     /// Strokes of `drawing` the Line Editor can change: vector lines on the
-    /// current art layer (not erased outlines).
+    /// current art layer, including cut outlines when the edit supports them.
     /// Only strokes whose bounds come within `reach` of `near` (when given)
     /// are copied, so a drag stays fast on busy drawings.
-    fn editable(&self, drawing: Id, near: Option<([f32; 2], f32)>) -> Vec<Stroke> {
+    fn editable(&self, drawing: Id, near: Option<([f32; 2], f32)>, contours: bool) -> Vec<Stroke> {
         let art = self.art;
         let close = |st: &Stroke| {
             let Some((c, r)) = near else { return true };
@@ -3199,7 +3417,7 @@ impl Session {
             .map(|d| {
                 d.strokes
                     .iter()
-                    .filter(|st| st.art == art && st.shape.is_empty() && close(st))
+                    .filter(|st| st.art == art && (contours || st.shape.is_empty()) && close(st))
                     .cloned()
                     .collect()
             })
@@ -3239,7 +3457,37 @@ impl Session {
         };
         let mut before = Vec::new();
         let mut after = Vec::new();
-        for st in self.editable(drawing, Some((at, r))) {
+        for st in self.editable(drawing, Some((at, r)), true) {
+            if !st.shape.is_empty() {
+                let mut moved = st.clone();
+                let mut changed = false;
+                for point in moved.shape.iter_mut().flatten() {
+                    let w = weight(&Point {
+                        x: point[0],
+                        y: point[1],
+                        ..Point::default()
+                    });
+                    if w > 0.0 {
+                        point[0] += delta[0] * w;
+                        point[1] += delta[1] * w;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    // Keep the stamp path aligned with the edited contour.
+                    for p in &mut moved.points {
+                        let w = weight(p);
+                        p.x += delta[0] * w;
+                        p.y += delta[1] * w;
+                    }
+                    if !self.line_touched.contains(&st.id) {
+                        self.line_touched.push(st.id);
+                    }
+                    before.push(st);
+                    after.push(moved);
+                }
+                continue;
+            }
             if !st.points.iter().any(|p| weight(p) > 0.0)
                 && !st.points.windows(2).any(|w| {
                     // A long segment can pass through the brush with both
@@ -3248,6 +3496,7 @@ impl Session {
                         x: (w[0].x + w[1].x) * 0.5,
                         y: (w[0].y + w[1].y) * 0.5,
                         pressure: 1.0,
+                        width_offset: 0.0,
                         pen: Default::default(),
                     };
                     weight(&mid) > 0.0
@@ -3271,15 +3520,82 @@ impl Session {
         self.commit_line_edit(drawing, before, after);
     }
 
+    pub fn line_sculpt(
+        &mut self,
+        drawing: Id,
+        at: [f32; 2],
+        radius: f32,
+        mode: LineSculpt,
+        amount: f32,
+    ) {
+        let amount = (amount * self.line_edit_strength).clamp(0.0, 1.0);
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        for stroke in self.editable(drawing, Some((at, radius)), false) {
+            if stroke.kind == StrokeKind::Invisible {
+                continue;
+            }
+            let mut next = stroke.clone();
+            for (index, point) in next.points.iter_mut().enumerate() {
+                let t = (1.0 - (point.x - at[0]).hypot(point.y - at[1]) / radius.max(1e-3))
+                    .clamp(0.0, 1.0);
+                let strength = amount * t * t * (3.0 - 2.0 * t);
+                if strength == 0.0 {
+                    continue;
+                }
+                match mode {
+                    LineSculpt::Smooth => {
+                        if index > 0 && index + 1 < stroke.points.len() {
+                            let a = stroke.points[index - 1];
+                            let b = stroke.points[index + 1];
+                            point.x += ((a.x + b.x) * 0.5 - point.x) * strength * 0.5;
+                            point.y += ((a.y + b.y) * 0.5 - point.y) * strength * 0.5;
+                        }
+                    }
+                    LineSculpt::SmoothPressure => {
+                        if index > 0 && index + 1 < stroke.points.len() {
+                            let average = (stroke.points[index - 1].pressure
+                                + stroke.points[index + 1].pressure)
+                                * 0.5;
+                            point.pressure += (average - point.pressure) * strength;
+                        }
+                    }
+                    LineSculpt::Thicken => point.width_offset += strength * radius * 0.25,
+                    LineSculpt::Thin => {
+                        let available = (stroke.point_width(point) - 0.1).max(0.0);
+                        point.width_offset -= (strength * radius * 0.25).min(available);
+                    }
+                    LineSculpt::Push => {}
+                }
+            }
+            if next != stroke {
+                if !self.line_touched.contains(&stroke.id) {
+                    self.line_touched.push(stroke.id);
+                }
+                before.push(stroke);
+                after.push(next);
+            }
+        }
+        self.commit_line_edit(drawing, before, after);
+    }
+
     /// Shift-paint: add the points within `radius` of `at` to the
     /// Line Editor's selection.
     pub fn line_select(&mut self, drawing: Id, at: [f32; 2], radius: f32) {
-        for st in self.editable(drawing, Some((at, radius))) {
-            for (i, p) in st.points.iter().enumerate() {
-                if (p.x - at[0]).hypot(p.y - at[1]) <= radius
-                    && !self.line_points.contains(&(st.id, i))
+        for st in self.editable(drawing, Some((at, radius)), true) {
+            let mut select = |i, [x, y]: [f32; 2]| {
+                if (x - at[0]).hypot(y - at[1]) <= radius && !self.line_points.contains(&(st.id, i))
                 {
                     self.line_points.push((st.id, i));
+                }
+            };
+            if st.shape.is_empty() {
+                for (i, p) in st.points.iter().enumerate() {
+                    select(i, [p.x, p.y]);
+                }
+            } else {
+                for (i, &p) in st.shape.iter().flatten().enumerate() {
+                    select(i, p);
                 }
             }
         }
@@ -3291,7 +3607,7 @@ impl Session {
         let mut after = Vec::new();
         let picked_ids: Vec<Id> = self.line_points.iter().map(|(id, _)| *id).collect();
         for st in self
-            .editable(drawing, None)
+            .editable(drawing, None, true)
             .into_iter()
             .filter(|st| picked_ids.contains(&st.id))
         {
@@ -3306,9 +3622,14 @@ impl Session {
             }
             let mut moved = st.clone();
             for i in picked {
-                if let Some(p) = moved.points.get_mut(i) {
-                    p.x += delta[0];
-                    p.y += delta[1];
+                if moved.shape.is_empty() {
+                    if let Some(p) = moved.points.get_mut(i) {
+                        p.x += delta[0];
+                        p.y += delta[1];
+                    }
+                } else if let Some(p) = moved.shape.iter_mut().flatten().nth(i) {
+                    p[0] += delta[0];
+                    p[1] += delta[1];
                 }
             }
             if !self.line_touched.contains(&st.id) {
@@ -3393,11 +3714,30 @@ impl Session {
             }
             let was_selected = selection.contains(&stroke.id);
             selection.retain(|id| *id != stroke.id);
-            let after = outside
+            let pieces = symphony_vector::cut::split_path(stroke, &clip)
+                .filter(|pieces| {
+                    pieces.iter().filter(|(inside, _)| *inside).count() == inside.len()
+                        && pieces.iter().filter(|(inside, _)| !inside).count() == outside.len()
+                })
+                .unwrap_or_else(|| {
+                    outside
+                        .into_iter()
+                        .map(|shape| (false, shape))
+                        .chain(inside.into_iter().map(|shape| (true, shape)))
+                        .map(|(inside, shape)| {
+                            (
+                                inside,
+                                Stroke {
+                                    shape,
+                                    ..stroke.clone()
+                                },
+                            )
+                        })
+                        .collect()
+                });
+            let after = pieces
                 .into_iter()
-                .map(|shape| (false, shape))
-                .chain(inside.into_iter().map(|shape| (true, shape)))
-                .map(|(inside, shape)| {
+                .map(|(inside, mut piece)| {
                     let id = self.doc.ids.fresh();
                     if inside {
                         picked.push(id);
@@ -3405,11 +3745,8 @@ impl Session {
                     if was_selected && (!remove || !inside) {
                         selection.push(id);
                     }
-                    Stroke {
-                        id,
-                        shape,
-                        ..stroke.clone()
-                    }
+                    piece.id = id;
+                    piece
                 })
                 .collect();
             edits.push(Edit::ReplaceStroke {
@@ -3541,7 +3878,7 @@ impl Session {
         let mut after = Vec::new();
         let touched = std::mem::take(&mut self.line_touched);
         for st in self
-            .editable(drawing, None)
+            .editable(drawing, None, false)
             .into_iter()
             .filter(|st| touched.contains(&st.id))
         {
@@ -3667,6 +4004,134 @@ mod tests {
     }
 
     #[test]
+    fn camera_facing_strokes_render_when_the_plane_is_edge_on() {
+        for texture in [None, Some(symphony_core::stroke::StrokeTexture::default())] {
+            let mut s = Session::new_scene();
+            s.doc.settings.width = 240;
+            s.doc.settings.height = 240;
+            square_drawing(&mut s);
+            let drawing = s.doc.exposed(0, 1).unwrap();
+            let stroke = &mut s.doc.drawings.get_mut(&drawing).unwrap().strokes[0];
+            stroke.texture = texture;
+            stroke.max_width = 8.0;
+            s.set_selected_peg_tilt(true, [0.0, 90.0]);
+            s.end_gesture();
+            let edge_on = symphony_render::render_frame(&s.doc, 1, 240, 240).unwrap();
+            s.set_selected_peg_face_camera(true);
+            let facing = symphony_render::render_frame(&s.doc, 1, 240, 240).unwrap();
+            assert_ne!(edge_on, facing);
+            s.undo();
+            assert_eq!(
+                symphony_render::render_frame(&s.doc, 1, 240, 240).unwrap(),
+                edge_on
+            );
+        }
+    }
+
+    #[test]
+    fn bookmarks_follow_scene_frame_insertions_and_undo() {
+        let mut s = Session::new_scene();
+        s.save_bookmark(symphony_core::doc::Bookmark {
+            id: Id(0),
+            name: "Beat".into(),
+            start: 2,
+            end: 8,
+            colour: None,
+            notes: "Hold".into(),
+        });
+        let original = s.doc.bookmarks[0].clone();
+        s.frame = 4;
+        s.insert_inbetweens(3);
+        assert_eq!((s.doc.bookmarks[0].start, s.doc.bookmarks[0].end), (2, 11));
+        s.undo();
+        assert_eq!(s.doc.bookmarks.as_slice(), std::slice::from_ref(&original));
+        s.remove_bookmark(original.id);
+        assert!(s.doc.bookmarks.is_empty());
+        s.undo();
+        assert_eq!(s.doc.bookmarks, [original]);
+    }
+
+    #[test]
+    fn thinning_keeps_the_path_and_undoes_as_one_gesture() {
+        let mut s = Session::new_scene();
+        square_drawing(&mut s);
+        let drawing = s.doc.exposed(0, 1).unwrap();
+        let before = s.doc.drawings[&drawing].strokes[0].clone();
+        let point = before.points[0];
+        for _ in 0..2 {
+            s.line_sculpt(drawing, [point.x, point.y], 12.0, LineSculpt::Thin, 0.2);
+        }
+        s.line_edit_finish(drawing, 0.0);
+        let after = &s.doc.drawings[&drawing].strokes[0];
+        assert_eq!(after.points[0].pressure, point.pressure);
+        assert!(after.point_width(&after.points[0]) < before.min_width);
+        assert_eq!(after.min_width, before.min_width);
+        assert_eq!(after.max_width, before.max_width);
+        assert!(before
+            .points
+            .iter()
+            .zip(&after.points)
+            .all(|(a, b)| (a.x, a.y) == (b.x, b.y)));
+        let edited = after.clone();
+        let reopened: Stroke =
+            serde_json::from_slice(&serde_json::to_vec(&edited).unwrap()).unwrap();
+        assert_eq!(reopened, edited);
+        s.undo();
+        assert_eq!(s.doc.drawings[&drawing].strokes[0], before);
+        s.redo();
+        assert_eq!(s.doc.drawings[&drawing].strokes[0], edited);
+        s.undo();
+
+        s.line_sculpt(drawing, [point.x, point.y], 12.0, LineSculpt::Thicken, 1.0);
+        let thickened = &s.doc.drawings[&drawing].strokes[0];
+        assert!(thickened.point_width(&thickened.points[0]) > before.max_width);
+        assert_eq!(thickened.points[0].pressure, point.pressure);
+    }
+
+    #[test]
+    fn cutter_outline_points_remain_editable() {
+        let mut s = Session::new_scene();
+        square_drawing(&mut s);
+        let id = s.doc.exposed(0, 1).unwrap();
+        s.validate_selection();
+        s.cut_area(
+            id,
+            vec![[50.0, 9.0], [70.0, 9.0], [70.0, 9.9], [50.0, 9.9]],
+            false,
+            false,
+        );
+        let fragment = s.selected_strokes()[0].clone();
+        let point = fragment.shape[0][0];
+        s.line_select(id, point, 0.01);
+        assert!(s.line_points.contains(&(fragment.id, 0)));
+        s.line_move_selected(id, [2.0, 3.0]);
+        s.line_edit_finish(id, 0.0);
+        assert_eq!(
+            s.selected_strokes()[0].shape[0][0],
+            [point[0] + 2.0, point[1] + 3.0]
+        );
+        s.undo();
+        assert!(s.doc.drawings[&id].strokes.contains(&fragment));
+    }
+
+    #[test]
+    fn onion_alignment_changes_only_the_ghost_transform() {
+        let mut s = Session::new_scene();
+        square_drawing(&mut s);
+        let before = symphony_render::render_frame(&s.doc, 1, 160, 90).unwrap();
+        s.onion.alignment[0] = OnionAlignment {
+            offset: [40.0, -8.0],
+            rotation: 90.0,
+            scale: 2.0,
+        };
+        let (x, y) = s.onion.alignment[0].transform().apply(4.0, 0.0);
+        assert!((x - 40.0).abs() < 1e-4 && y.abs() < 1e-4);
+        assert_eq!(s.onion.alignment[1].transform(), Affine::IDENTITY);
+        let after = symphony_render::render_frame(&s.doc, 1, 160, 90).unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
     fn cutter_splits_line_and_fill_selects_inside_and_undoes_together() {
         let mut s = Session::new_scene();
         square_drawing(&mut s);
@@ -3680,6 +4145,8 @@ mod tests {
         assert_eq!(s.doc.drawings[&id].strokes.len(), 2);
         assert_eq!(s.doc.drawings[&id].fills.len(), 2);
         assert_eq!(s.selected_strokes().len(), 1);
+        assert!(s.selected_strokes()[0].shape.is_empty());
+        assert!(s.selected_strokes()[0].points.len() > 1);
         assert!(s.selected_fills()[0].contains(65.0, 50.0));
         assert!(!s.selected_fills()[0].contains(35.0, 50.0));
         s.transform_selection(Affine::translate(4.0, 7.0), "Move selection");
@@ -3907,12 +4374,14 @@ mod tests {
                     x: x0,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
                 Point {
                     x: x1,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
             ],
@@ -3993,6 +4462,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -4085,6 +4555,7 @@ mod tests {
                         x: t * 100.0,
                         y: 0.0,
                         pressure: pressure(t),
+                        width_offset: 0.0,
                         pen: Default::default(),
                     }
                 })
@@ -4174,12 +4645,14 @@ mod tests {
                     x: 0.0,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
                 Point {
                     x: 200.0,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
             ],
@@ -4260,6 +4733,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -4425,6 +4899,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -4441,18 +4916,38 @@ mod tests {
                 x: 14.0,
                 y: 20.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             },
             Point {
                 x: 14.0,
                 y: 80.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             },
         ];
         s.close_gap(0, 1, &rough, 40.0);
         s.paint_at(0, 1, 50.0, 50.0, 1.0);
         assert_eq!(fills(&s).len(), 1, "after Close Gap it can");
+    }
+
+    #[test]
+    fn moving_a_tilted_peg_pivot_preserves_artwork_and_undoes() {
+        let mut s = Session::new_scene();
+        s.adjust_peg(0, |peg| peg.rotation = 32.0);
+        s.set_selected_peg_tilt(true, [24.0, -43.0]);
+        s.end_gesture();
+        let before = s.transform_peg(0).unwrap().clone();
+        s.relocate_peg_pivot(0, (12.0, 23.0));
+        s.end_gesture();
+        let after = s.transform_peg(0).unwrap();
+        assert_eq!(after.pivot, (12.0, 23.0));
+        let a = before.transform_at(s.frame).apply(8.0, -15.0);
+        let b = after.transform_at(s.frame).apply(8.0, -15.0);
+        assert!((a.0 - b.0).hypot(a.1 - b.1) < 1e-4);
+        s.undo();
+        assert_eq!(s.transform_peg(0), Some(&before));
     }
 
     #[test]

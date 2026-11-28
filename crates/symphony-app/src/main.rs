@@ -1773,6 +1773,12 @@ impl SymphonyApp {
                 .map_or("Redo".into(), |n| format!("Redo {n}"));
             self.menu_item(ui, Action::Undo, undo);
             self.menu_item(ui, Action::Redo, redo);
+            if ui.button("Undo History").clicked() {
+                self.maximised = None;
+                self.show_view(View::UndoHistory);
+                ui.close();
+            }
+
             ui.separator();
             self.menu_action(ui, Action::Cut);
             self.menu_action(ui, Action::Copy);
@@ -2253,7 +2259,10 @@ impl SymphonyApp {
                     tip.push_str("\nDrag, scale or rotate the selection");
                     Icon::Transform
                 }
-                Tool::Brush if panels::is_textured_vector(&self.s.brush) => Icon::Pencil,
+                // Pen for vector brushes, Brush for textured ones,
+                // Pencil while the Pencil (in the Brush flyout) is active.
+                Tool::Brush if self.s.tool == Tool::Pencil => Icon::Pencil,
+                Tool::Brush if panels::is_textured_vector(&self.s.brush) => Icon::Brush,
                 Tool::Brush => Icon::Pen,
                 Tool::Transform => {
                     tip = format!("Transform the peg\n{tip}");
@@ -2267,7 +2276,7 @@ impl SymphonyApp {
             let response = icons::tool_button(
                 ui,
                 icon,
-                self.s.tool == tool,
+                self.s.tool == tool || tool == Tool::Brush && self.s.tool == Tool::Pencil,
                 tool.planned_for().is_none(),
                 &tip,
             );
@@ -2293,11 +2302,11 @@ impl SymphonyApp {
                     anchor = Some((tool, response.rect));
                 }
             }
-            if response.clicked() {
+            // A click on Brush while the Pencil is active keeps the Pencil.
+            if response.clicked() && (tool != Tool::Brush || self.s.tool != Tool::Pencil) {
                 self.s.tool = tool;
             }
             if response.double_clicked() {
-                self.s.tool = tool;
                 self.open_tool_properties();
             }
         }
@@ -2410,6 +2419,10 @@ impl SymphonyApp {
                                         self.s.tool = tool;
                                         return true;
                                     }
+                                }
+                                if row(ui, "Pencil", self.s.tool == Tool::Pencil) {
+                                    self.s.tool = Tool::Pencil;
+                                    return true;
                                 }
                             }
                             Tool::Paint => {
@@ -2626,6 +2639,7 @@ impl SymphonyApp {
                         x: -420.0 + t * 380.0,
                         y: y + (t * std::f32::consts::TAU).sin() * 14.0,
                         pressure: (t * std::f32::consts::PI).sin(),
+                        width_offset: 0.0,
                         pen: Default::default(),
                     }
                 })
@@ -2656,6 +2670,48 @@ impl SymphonyApp {
         use symphony_core::stroke::ArtLayer;
         let canvas = [View::Camera, View::Drawing];
         let mut out: Vec<Entry> = Vec::new();
+        out.push(
+            Entry::new(
+                "Align onion skins",
+                Kind::Action,
+                Command::ShowOnionAlignment,
+                "onion.align",
+            )
+            .words("move reposition rotate scale offset ghost previous next")
+            .ctx(&canvas),
+        );
+        use views::guides::Perspective;
+        for (mode, title, id) in [
+            (
+                Perspective::OnePoint,
+                "One-point perspective guide",
+                "guide.one-point",
+            ),
+            (
+                Perspective::TwoPoint,
+                "Two-point perspective guide",
+                "guide.two-point",
+            ),
+            (Perspective::Off, "Hide perspective guide", "guide.hide"),
+        ] {
+            out.push(
+                Entry::new(title, Kind::Action, Command::PerspectiveGuide(mode), id)
+                    .words("grid horizon vanishing point drawing")
+                    .ctx(&canvas),
+            );
+        }
+        for mode in session::LineSculpt::ALL {
+            out.push(
+                Entry::new(
+                    mode.title(),
+                    Kind::Tool,
+                    Command::LineSculpt(mode),
+                    mode.id(),
+                )
+                .words("line editor sculpt width pressure")
+                .ctx(&canvas),
+            );
+        }
         #[cfg(target_os = "macos")]
         out.push(
             Entry::new(
@@ -2834,6 +2890,34 @@ impl SymphonyApp {
             );
         }
         let timing_views = [View::Timeline, View::Xsheet];
+        out.push(
+            Entry::new(
+                "Add timeline bookmark",
+                Kind::Action,
+                Command::AddBookmark,
+                "timeline.bookmark.add",
+            )
+            .words("frame marker range note")
+            .ctx(&timing_views),
+        );
+        for bookmark in self
+            .s
+            .doc
+            .bookmarks
+            .iter()
+            .filter(|bookmark| bookmark.start <= self.s.length())
+        {
+            out.push(
+                Entry::new(
+                    &format!("Bookmark: {}", bookmark.name),
+                    Kind::Go,
+                    Command::GoToFrame(bookmark.start),
+                    &format!("timeline.bookmark.{}", bookmark.id.0),
+                )
+                .words(&bookmark.notes)
+                .ctx(&timing_views),
+            );
+        }
         for action in views::timing::TimelineAction::ALL {
             let binding = if action == views::timing::TimelineAction::Extend {
                 Action::IncreaseExposure
@@ -2941,15 +3025,20 @@ impl SymphonyApp {
         }
         // Views: bring a tab to the front.
         for v in View::ALL {
+            let title = if v == View::Multiplane {
+                v.title().to_owned()
+            } else {
+                format!("{} view", v.title())
+            };
             out.push(
                 Entry::new(
-                    &format!("{} view", v.title()),
+                    &title,
                     Kind::View,
                     Command::ShowView(v),
                     &format!("view.show.{v:?}"),
                 )
                 .words(if v == View::Multiplane {
-                    "window panel tab parallax depth side staging"
+                    "window panel tab parallax depth side staging stage 3d orbit guides"
                 } else {
                     "window panel tab"
                 }),
@@ -3161,7 +3250,23 @@ impl SymphonyApp {
         let Some(mut st) = self.palette.take() else {
             return;
         };
-        let entries = self.search_entries();
+        let mut entries = self.search_entries();
+        if st.query.trim().eq_ignore_ascii_case("undo") {
+            let applied: Vec<_> = self
+                .s
+                .history
+                .entries()
+                .take(self.s.history.undo_len())
+                .collect();
+            for (index, name) in applied.into_iter().rev().take(4).enumerate() {
+                entries.push(search::Entry::new(
+                    &format!("Undo through {name}"),
+                    search::Kind::Action,
+                    search::Command::UndoThrough(index + 1),
+                    &format!("history.undo.{index}"),
+                ));
+            }
+        }
         let uses = self.search_uses.clone();
         match views::palette::ui(
             ctx,
@@ -3187,6 +3292,25 @@ impl SymphonyApp {
     fn run_command(&mut self, ctx: &egui::Context, cmd: search::Command) {
         use search::{Command, Setting};
         match cmd {
+            Command::LineSculpt(mode) => {
+                self.s.tool = Tool::LineEditor;
+                self.s.line_sculpt = mode;
+                self.s.line_points.clear();
+            }
+            Command::PerspectiveGuide(mode) => self.s.guides.perspective = mode,
+            Command::ShowOnionAlignment => {
+                self.s.begin_onion_alignment();
+                if !matches!(self.hovered_view, Some(View::Camera | View::Drawing)) {
+                    self.maximised = None;
+                    self.show_view(View::Camera);
+                }
+            }
+            Command::UndoThrough(steps) => {
+                for _ in 0..steps.min(self.s.history.undo_len()) {
+                    self.s.undo();
+                }
+            }
+
             Command::Action(a) => self.run(ctx, a),
             Command::ShowView(v) => {
                 self.maximised = None;
@@ -3239,6 +3363,7 @@ impl SymphonyApp {
             Command::ReduceStrokePoints => self.s.reduce_points(),
             #[cfg(target_os = "macos")]
             Command::PickScreenColour => screen_colour::pick(ctx, self.s.key.clone()),
+            Command::AddBookmark => self.timing.new_bookmark(&self.s),
             Command::GoToFrame(f) => self.s.frame = f.clamp(1, self.s.length()),
             Command::SetZoom(z) => {
                 self.camera.set_zoom(z);
@@ -3980,6 +4105,7 @@ impl Viewer<'_> {
             View::LayerProperties => node::inspector(ui, self.s, self.node_view),
             View::Function => function::ui(ui, self.s, self.function),
             View::NodeLibrary => node::library(ui, self.s, self.node_view),
+            View::UndoHistory => panels::undo_history(ui, self.s),
             View::Library => panels::planned(ui, "Library (templates and symbols)", "M6"),
         }
     }
@@ -4839,6 +4965,7 @@ impl SymphonyApp {
         }
 
         self.search_box(&ctx);
+        self.timing.bookmark_window(&ctx, &mut self.s);
         self.dialogs(&ctx);
 
         let pending = self.pen.as_ref().is_some_and(|p| p.has_pending());

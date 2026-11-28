@@ -151,7 +151,13 @@ fn outline_key(stroke: &Stroke) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for p in &stroke.points {
-        (p.x.to_bits(), p.y.to_bits(), p.pressure.to_bits()).hash(&mut h);
+        (
+            p.x.to_bits(),
+            p.y.to_bits(),
+            p.pressure.to_bits(),
+            p.width_offset.to_bits(),
+        )
+            .hash(&mut h);
         (
             p.pen.tilt.to_bits(),
             p.pen.azimuth.to_bits(),
@@ -383,6 +389,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -404,6 +411,7 @@ mod tests {
                 x,
                 y,
                 pressure: 0.3 + 0.7 * ((i as f32 * 0.7).sin() * 0.5 + 0.5),
+                width_offset: 0.0,
                 pen: Default::default(),
             })
             .collect();

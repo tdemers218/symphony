@@ -23,10 +23,11 @@ pub enum View {
     Library,
     NodeLibrary,
     Multiplane,
+    UndoHistory,
 }
 
 impl View {
-    pub const ALL: [View; 12] = [
+    pub const ALL: [View; 13] = [
         View::Camera,
         View::Drawing,
         View::Timeline,
@@ -39,6 +40,7 @@ impl View {
         View::Library,
         View::NodeLibrary,
         View::Multiplane,
+        View::UndoHistory,
     ];
 
     pub fn title(self) -> &'static str {
@@ -48,13 +50,14 @@ impl View {
             View::Timeline => "Timeline",
             View::Xsheet => "Xsheet",
             View::Node => "Node",
-            View::Multiplane => "Multiplane",
+            View::Multiplane => "3D View",
             View::ToolProperties => "Tool Properties",
             View::Colour => "Colour",
             View::LayerProperties => "Node Properties",
             View::Function => "Function",
             View::NodeLibrary => "Node Library",
             View::Library => "Library",
+            View::UndoHistory => "Undo History",
         }
     }
 }

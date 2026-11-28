@@ -868,7 +868,13 @@ fn keys(
 ) -> (u64, Option<u64>, u64) {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for p in &stroke.points {
-        (p.x.to_bits(), p.y.to_bits(), p.pressure.to_bits()).hash(&mut h);
+        (
+            p.x.to_bits(),
+            p.y.to_bits(),
+            p.pressure.to_bits(),
+            p.width_offset.to_bits(),
+        )
+            .hash(&mut h);
     }
     (stroke.min_width.to_bits(), stroke.max_width.to_bits()).hash(&mut h);
     (
@@ -958,6 +964,7 @@ pub fn sample(
                 x: 10.0 + t * (rect.width() - 20.0),
                 y: rect.height() * 0.5 + (t * std::f32::consts::TAU).sin() * wave,
                 pressure: (t * std::f32::consts::PI).sin(),
+                width_offset: 0.0,
                 pen: Default::default(),
             }
         })
@@ -1085,6 +1092,7 @@ mod tests {
                     x: 20.0 + i as f32 * 1.5,
                     y: y + (i as f32 * 0.1).sin() * 10.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -1187,6 +1195,7 @@ mod tests {
                                 x: x + t * 1.7,
                                 y: y + (t * 0.15).sin() * 12.0,
                                 pressure: 0.8,
+                                width_offset: 0.0,
                                 pen: Default::default(),
                             }
                         })
@@ -1271,6 +1280,7 @@ mod tests {
                 x: i as f32 * 4.0,
                 y: (i as f32 * 0.1).sin() * 60.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             })
             .collect();
@@ -1309,6 +1319,7 @@ mod tests {
                 x: 20.0,
                 y: 20.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             };
             128
@@ -1341,6 +1352,7 @@ mod tests {
             x: 20.0,
             y: 20.0,
             pressure: 1.0,
+            width_offset: 0.0,
             pen: Default::default(),
         }];
 

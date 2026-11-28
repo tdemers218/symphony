@@ -159,6 +159,10 @@ pub enum Edit {
         before: u32,
         after: u32,
     },
+    SetBookmarks {
+        before: Vec<crate::doc::Bookmark>,
+        after: Vec<crate::doc::Bookmark>,
+    },
     AddLayer(Box<LayerSnapshot>),
     /// The camera frame's black bars, before and after.
     SetBars {
@@ -482,6 +486,9 @@ impl Edit {
             Edit::SetLength { before, after } => {
                 s.settings.length = if forward { *after } else { *before }
             }
+            Edit::SetBookmarks { before, after } => {
+                s.bookmarks.clone_from(if forward { after } else { before });
+            }
             Edit::SetBars { before, after } => {
                 s.settings.bars = if forward { *after } else { *before };
             }
@@ -737,6 +744,14 @@ impl History {
         Some(name)
     }
 
+    /// Operations in chronological order, including redoable steps.
+    pub fn entries(&self) -> impl Iterator<Item = &str> {
+        self.undo
+            .iter()
+            .chain(self.redo.iter().rev())
+            .map(|step| step.name.as_str())
+    }
+
     pub fn undo_name(&self) -> Option<&str> {
         self.undo.back().map(|s| s.name.as_str())
     }
@@ -779,12 +794,31 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             }],
             tips: Default::default(),
             texture: None,
             shape: Vec::new(),
         }
+    }
+
+    #[test]
+    fn history_entries_stay_in_order_across_undo_and_redo() {
+        let (mut scene, mut history) = scene_with_layer();
+        for (name, after) in [("Extend shot", 60), ("Extend again", 72)] {
+            let before = scene.settings.length;
+            history.apply(&mut scene, name, vec![Edit::SetLength { before, after }]);
+        }
+        let names = ["Add layer", "Extend shot", "Extend again"];
+        assert_eq!(history.entries().collect::<Vec<_>>(), names);
+        history.undo(&mut scene);
+        history.undo(&mut scene);
+        assert_eq!(history.undo_len(), 1);
+        assert_eq!(history.entries().collect::<Vec<_>>(), names);
+        history.redo(&mut scene);
+        assert_eq!(history.undo_len(), 2);
+        assert_eq!(history.entries().collect::<Vec<_>>(), names);
     }
 
     #[test]
@@ -939,6 +973,7 @@ mod tests {
                     x: k as f32,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -988,6 +1023,7 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             }],
             tips: Default::default(),
@@ -1045,6 +1081,7 @@ mod tests {
                 x,
                 y: 0.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             }],
             tips: Default::default(),

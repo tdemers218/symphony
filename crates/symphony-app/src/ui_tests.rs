@@ -391,6 +391,7 @@ fn frame_cost() {
                             x: x0 + t * 120.0,
                             y: y + (t * 9.0).sin() * 5.0,
                             pressure: (t * 3.1).sin(),
+                            width_offset: 0.0,
                             pen: Default::default(),
                         }
                     })
@@ -597,6 +598,7 @@ fn line_edit_cost() {
                     x: x0 + k as f32 * 2.0,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -672,6 +674,7 @@ fn search_puts_a_blend_mode_on_the_selected_layer() {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -754,6 +757,7 @@ fn erase_cost() {
                     x: x0 + k as f32 * 2.0,
                     y: y + (k as f32 * 0.3).sin() * 4.0,
                     pressure: 0.7,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -825,6 +829,7 @@ fn busy_frame_cost() {
                     x: -900.0 + (i % 30) as f32 * 60.0 + k as f32 * 2.5,
                     y: -500.0 + (i / 30) as f32 * 45.0 + (k as f32 * 0.3).sin() * 10.0,
                     pressure: 0.4 + 0.6 * (k as f32 * 0.1).sin().abs(),
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -1128,6 +1133,7 @@ fn textured_erase_cost() {
                     x: x0 + k as f32 * 2.5,
                     y: y + (k as f32 * 0.2).sin() * 15.0,
                     pressure: 0.5 + (k as f32 * 0.1).sin() * 0.4,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -1193,6 +1199,7 @@ fn outline_cost() {
                 x: k as f32 * 2.5,
                 y: (k as f32 * 0.2).sin() * 15.0,
                 pressure: 0.5 + (k as f32 * 0.1).sin() * 0.4,
+                width_offset: 0.0,
                 pen: Default::default(),
             })
             .collect(),
@@ -2008,6 +2015,7 @@ fn mesh_warp_bends_the_drawing_in_renders() {
         x,
         y: 0.0,
         pressure: 1.0,
+        width_offset: 0.0,
         pen: Default::default(),
     };
     // Clear the layer's own drawing, then one straight line across.
@@ -2146,6 +2154,7 @@ fn points_warp_bends_only_the_connected_artwork() {
             x,
             y,
             pressure: 1.0,
+            width_offset: 0.0,
             pen: Default::default(),
         };
         let st = Stroke {
@@ -2279,6 +2288,7 @@ fn nodes_cells_and_sounds_can_be_deleted_and_undone() {
                 x: 0.0,
                 y: 0.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             };
             2
@@ -2317,6 +2327,7 @@ fn sketches_stay_out_of_exports_unless_included() {
             x,
             y,
             pressure: 1.0,
+            width_offset: 0.0,
             pen: Default::default(),
         };
         let st = Stroke {
@@ -2442,4 +2453,36 @@ fn smart_rig_drags_and_anchor_keys() {
     assert_eq!(kind(&s), Some(AnchorKind::Aim));
     cycle_anchor(&mut s);
     assert_eq!(kind(&s), None);
+}
+
+#[test]
+fn onion_alignment_moves_the_ghost_and_escape_restores_it() {
+    let mut harness = rig();
+    harness.state_mut().s.begin_onion_alignment();
+    harness.run_steps(2);
+    let start = harness.state().canvas.to_screen(0.0, 0.0);
+    let end = start + Vec2::new(40.0, 18.0);
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness
+        .input_mut()
+        .events
+        .extend([egui::Event::PointerMoved(start), button(start, true)]);
+    harness.step();
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(end));
+    harness.step();
+    harness.input_mut().events.push(button(end, false));
+    harness.step();
+    assert!(harness.state().s.onion.alignment[0].offset[0] > 0.0);
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(2);
+    assert!(harness.state().s.onion.alignment_edit.is_none());
+    assert_eq!(harness.state().s.onion.alignment[0].offset, [0.0, 0.0]);
 }

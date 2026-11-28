@@ -28,6 +28,7 @@ fn main() {
                     x: t * len,
                     y: (t * 20.0).sin() * 50.0 + 100.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 }
             })

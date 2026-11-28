@@ -40,7 +40,13 @@ pub fn simplify(points: &[Point], tolerance: f32, width_span: f32) -> Vec<Point>
         for i in a + 1..b {
             let (d, t) = seg_dist(&points[i], &points[a], &points[b]);
             let pressure = points[a].pressure + (points[b].pressure - points[a].pressure) * t;
-            let err = d.max((points[i].pressure - pressure).abs() * width_span * 0.5);
+            let offset =
+                points[a].width_offset + (points[b].width_offset - points[a].width_offset) * t;
+            let err = d.max(
+                ((points[i].pressure - pressure) * width_span + points[i].width_offset - offset)
+                    .abs()
+                    * 0.5,
+            );
             if err > worst {
                 worst = err;
                 at = i;
@@ -92,6 +98,7 @@ fn catmull(p0: &Point, p1: &Point, p2: &Point, p3: &Point, u: f32) -> Point {
         // Pressure is interpolated linearly: a curve through pressure
         // could dip below zero between points.
         pressure: (p1.pressure + (p2.pressure - p1.pressure) * u).clamp(0.0, 1.0),
+        width_offset: p1.width_offset + (p2.width_offset - p1.width_offset) * u,
         pen: symphony_core::stroke::Pen::lerp(p1.pen, p2.pen, u),
     }
 }
@@ -159,6 +166,7 @@ mod tests {
             x,
             y,
             pressure: 1.0,
+            width_offset: 0.0,
             pen: Default::default(),
         }
     }

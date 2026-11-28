@@ -63,7 +63,13 @@ fn fingerprint(st: &Stroke) -> u64 {
     format!("{:?}", st.tips).hash(&mut h);
     st.points.len().hash(&mut h);
     for p in &st.points {
-        (p.x.to_bits(), p.y.to_bits(), p.pressure.to_bits()).hash(&mut h);
+        (
+            p.x.to_bits(),
+            p.y.to_bits(),
+            p.pressure.to_bits(),
+            p.width_offset.to_bits(),
+        )
+            .hash(&mut h);
     }
     st.shape.len().hash(&mut h);
     for c in &st.shape {
@@ -362,6 +368,7 @@ mod tests {
                         x: -900.0 + (i % 30) as f32 * 60.0 + k as f32 * 3.0,
                         y: -500.0 + (i / 30) as f32 * 50.0 + (k as f32 * 0.4).sin() * 12.0,
                         pressure: 0.5 + 0.5 * (k as f32 * 0.2).sin(),
+                        width_offset: 0.0,
                         pen: Default::default(),
                     })
                     .collect(),

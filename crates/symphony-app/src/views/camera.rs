@@ -96,6 +96,7 @@ impl Default for CanvasState {
 #[derive(Clone, Copy, PartialEq)]
 enum LineMode {
     Push,
+    Sculpt(crate::session::LineSculpt),
     Select,
     MoveSelected,
 }
@@ -113,7 +114,7 @@ struct LineDrag {
 
 /// One step of a Line Editor drag to scene point `to`; `radius` is in
 /// drawing units.
-fn line_step(s: &mut Session, le: &mut LineDrag, to: (f32, f32), radius: f32) {
+fn line_step(s: &mut Session, le: &mut LineDrag, to: (f32, f32), radius: f32, pressure: f32) {
     let (x, y) = le.to_local.apply(to.0, to.1);
     let delta = [x - le.last[0], y - le.last[1]];
     if delta[0] == 0.0 && delta[1] == 0.0 {
@@ -122,6 +123,10 @@ fn line_step(s: &mut Session, le: &mut LineDrag, to: (f32, f32), radius: f32) {
     le.moved = true;
     match le.mode {
         LineMode::Push => s.line_push(le.drawing, le.last, radius, delta),
+        LineMode::Sculpt(mode) => {
+            let amount = (delta[0].hypot(delta[1]) / radius.max(1e-3)).min(1.0) * pressure;
+            s.line_sculpt(le.drawing, [x, y], radius, mode, amount);
+        }
         LineMode::Select => s.line_select(le.drawing, [x, y], radius),
         LineMode::MoveSelected => s.line_move_selected(le.drawing, delta),
     }
@@ -203,6 +208,7 @@ fn line_points(d: &LineDraft, step: f32) -> Vec<Point> {
                 x,
                 y,
                 pressure: d.pressure,
+                width_offset: 0.0,
                 pen: Default::default(),
             }
         })
@@ -303,8 +309,297 @@ fn fit_zoom(rect: Rect, w: f32, h: f32) -> f32 {
         .clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
-/// Scene units -> screen points for this canvas rect. The zoom is
-/// absolute: the rect only places the centre.
+/// Fixed viewport control for the selected drawing peg.
+fn tilt_controls(ui: &mut egui::Ui, canvas: Rect, s: &mut Session) -> (bool, Vec<egui::Shape>) {
+    use egui::Shape;
+    if s.tool != Tool::Transform || canvas.width() < 114.0 || canvas.height() < 114.0 {
+        return (false, Vec::new());
+    }
+    let Some(peg) = s.transform_peg(s.selected).filter(|peg| peg.tilt_enabled) else {
+        return (false, Vec::new());
+    };
+    let mut angles = peg
+        .tilt
+        .as_ref()
+        .map_or([0.0; 2], |tilt| [tilt[0].at(s.frame), tilt[1].at(s.frame)]);
+    let mut roll = peg.rotation.at(s.frame);
+    let centre = canvas.right_bottom() - Vec2::splat(57.0);
+    let rect = Rect::from_center_size(centre, Vec2::splat(94.0));
+    let response = ui.interact(rect, ui.scope_id().with("peg-orientation"), Sense::drag());
+    let drag_id = response.id.with("axis");
+    #[derive(Clone, Copy)]
+    struct RingDrag {
+        axis: usize,
+        origin: Pos2,
+        direction: Vec2,
+        angles: [f32; 2],
+        roll: f32,
+    }
+
+    let rotate = |[x, y, z]: [f32; 3], pitch: f32, yaw: f32| {
+        let (sx, cx) = pitch.to_radians().sin_cos();
+        let (sy, cy) = yaw.to_radians().sin_cos();
+        let depth = y * sx + z * cx;
+        [x * cy + depth * sy, y * cx - z * sx, depth * cy - x * sy]
+    };
+    // All three rings and the cube use the same local-to-peg basis.
+    let orient = |[x, y, z]: [f32; 3], [pitch, yaw]: [f32; 2], roll: f32| {
+        let xy = egui::emath::Rot2::from_angle(roll.to_radians()) * Vec2::new(x, y);
+        rotate([xy.x, xy.y, z], pitch, yaw)
+    };
+    let held = response.dragged_by(egui::PointerButton::Primary)
+        && ui.data(|data| {
+            data.get_temp::<Option<RingDrag>>(drag_id)
+                .flatten()
+                .is_some()
+        });
+    let proximity = if held {
+        1.0
+    } else {
+        ui.ctx().pointer_hover_pos().map_or(0.0, |p| {
+            ((54.0 - p.distance(centre)) / 28.0).clamp(0.0, 1.0)
+        })
+    };
+    let scale = 1.0 + 0.15 * proximity * proximity * (3.0 - 2.0 * proximity);
+    let radius = 35.0 * scale;
+    let ring_bases = |angles, roll| {
+        [
+            [[0.0, radius, 0.0], [0.0, 0.0, radius]],
+            [[0.0, 0.0, radius], [radius, 0.0, 0.0]],
+            [[radius, 0.0, 0.0], [0.0, radius, 0.0]],
+        ]
+        .map(|basis| basis.map(|p| orient(p, angles, roll)))
+    };
+    let ring_paths = |bases: [[[f32; 3]; 2]; 3]| {
+        bases.map(|[[ax, ay, az], [bx, by, bz]]| {
+            // Start edge-on so each half is one continuous arc. The first
+            // half goes towards the viewer and is drawn above the cube.
+            let phase = bz.atan2(az) + std::f32::consts::FRAC_PI_2;
+            [0, 1].map(|half| {
+                (0..=32)
+                    .map(|i| {
+                        let t = phase + (half * 32 + i) as f32 * std::f32::consts::PI / 32.0;
+                        let (sin, cos) = t.sin_cos();
+                        centre + Vec2::new(ax * cos + bx * sin, ay * cos + by * sin)
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+    };
+    let bases = ring_bases(angles, roll);
+    let rings = ring_paths(bases);
+    let nearest = |p: Pos2| {
+        rings
+            .iter()
+            .enumerate()
+            .map(|(axis, arcs)| {
+                (
+                    axis,
+                    arcs.iter()
+                        .flatten()
+                        .map(|q| p.distance_sq(*q))
+                        .fold(f32::INFINITY, f32::min),
+                )
+            })
+            .filter(|(_, distance)| *distance < 64.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(axis, _)| axis)
+    };
+    let hover = ui.ctx().pointer_hover_pos().and_then(nearest);
+    // Freeze the screen direction and starting orientation at the grab.
+    // Re-inverting the projected ellipse as the mouse crosses its centre
+    // or an edge-on ring can turn a few pixels into a half-turn.
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        let drag = ui
+            .input(|input| input.pointer.press_origin())
+            .and_then(|origin| {
+                let axis = nearest(origin)?;
+                let ring = &rings[axis];
+                let samples: Vec<_> = ring
+                    .iter()
+                    .flat_map(|arc| arc.iter().take(32))
+                    .copied()
+                    .collect();
+                let (index, _) = samples.iter().enumerate().min_by(|(_, a), (_, b)| {
+                    origin.distance_sq(**a).total_cmp(&origin.distance_sq(**b))
+                })?;
+                let tangent = samples[(index + 1) % 64] - samples[(index + 63) % 64];
+                let [[ax, ay, _], [bx, by, _]] = bases[axis];
+                let a = Vec2::new(ax, ay);
+                let b = Vec2::new(bx, by);
+                let fallback = if a.length_sq() > b.length_sq() { -a } else { b };
+                let direction = if tangent.length() > 0.75 {
+                    tangent
+                } else {
+                    fallback
+                };
+                Some(RingDrag {
+                    axis,
+                    origin,
+                    direction: direction.normalized(),
+                    angles,
+                    roll,
+                })
+            });
+        ui.data_mut(|data| data.insert_temp(drag_id, drag));
+    }
+    let drag = ui
+        .data(|data| data.get_temp::<Option<RingDrag>>(drag_id))
+        .flatten();
+    let active = drag.map(|drag| drag.axis);
+    let locked = s.doc.column(s.selected).is_some_and(|column| column.locked);
+    if let Some((drag, pointer)) = drag
+        .filter(|_| !locked && response.dragged_by(egui::PointerButton::Primary))
+        .zip(response.interact_pointer_pos())
+    {
+        let axis = drag.axis;
+        let rotation = ((pointer - drag.origin).dot(drag.direction) / 35.0).to_degrees();
+        {
+            let (sin, cos) = rotation.to_radians().sin_cos();
+            let columns = std::array::from_fn::<_, 3, _>(|column| {
+                let mut p = [0.0; 3];
+                if column == axis {
+                    p[axis] = 1.0;
+                } else {
+                    p[column] = cos;
+                    let next = (axis + 1) % 3;
+                    let last = (axis + 2) % 3;
+                    if column == next {
+                        p[last] = sin;
+                    } else {
+                        p[next] = -sin;
+                    }
+                }
+                orient(p, drag.angles, drag.roll)
+            });
+            let [x, y, z] = columns;
+            let pitch = (-z[1]).atan2(z[0].hypot(z[2])).to_degrees();
+            let (yaw, spin) = if z[0].hypot(z[2]) > 1e-5 {
+                (z[0].atan2(z[2]).to_degrees(), x[1].atan2(y[1]).to_degrees())
+            } else {
+                ((-x[2]).atan2(x[0]).to_degrees(), 0.0)
+            };
+            // Equivalent Euler triples can differ by half a turn. Keep
+            // the closest one to preserve continuity in keyed angles.
+            let previous = [angles[0], angles[1], roll];
+            let near = |candidate: [f32; 3]| {
+                std::array::from_fn::<_, 3, _>(|i| {
+                    previous[i] + (candidate[i] - previous[i] + 180.0).rem_euclid(360.0) - 180.0
+                })
+            };
+            let direct = near([pitch, yaw, spin]);
+            let alternate = near([180.0 - pitch, yaw + 180.0, spin + 180.0]);
+            let distance = |values: [f32; 3]| {
+                values
+                    .into_iter()
+                    .zip(previous)
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f32>()
+            };
+            let [pitch, yaw, spin] = if distance(direct) <= distance(alternate) {
+                direct
+            } else {
+                alternate
+            };
+            angles = [pitch, yaw];
+            roll = spin;
+            s.set_selected_peg_tilt(true, angles);
+            s.adjust_peg(s.selected, |values| values.rotation = roll);
+        }
+    }
+    let rings = if active.is_some() {
+        ring_paths(ring_bases(angles, roll))
+    } else {
+        rings
+    };
+    let colours = [
+        egui::Color32::from_rgb(235, 113, 117),
+        egui::Color32::from_rgb(151, 206, 114),
+        egui::Color32::from_rgb(111, 164, 240),
+    ];
+    let ring_shapes = |front: bool| {
+        rings.iter().enumerate().map(move |(axis, ring)| {
+            let highlighted = active.or(hover) == Some(axis);
+            let opacity = if active.is_some_and(|held| held != axis) {
+                if front {
+                    0.23
+                } else {
+                    0.10
+                }
+            } else if front || highlighted {
+                1.0
+            } else {
+                0.35
+            };
+            let colour = colours[axis].gamma_multiply(opacity);
+            Shape::line(
+                ring[usize::from(!front)].clone(),
+                EStroke::new(if highlighted { 2.7 } else { 1.7 }, colour),
+            )
+        })
+    };
+
+    let mut shapes = vec![
+        Shape::circle_filled(centre, 44.0, theme::GLASS_FLOATING.gamma_multiply(0.86)),
+        Shape::circle_stroke(
+            centre,
+            44.0,
+            EStroke::new(1.0, theme::TEXT_PRIMARY.gamma_multiply(0.56)),
+        ),
+    ];
+    shapes.extend(ring_shapes(false));
+    let half_size = 16.0 * scale;
+    let cube = std::array::from_fn::<_, 8, _>(|i| {
+        let point = [1, 2, 4].map(|bit| if i & bit == 0 { -half_size } else { half_size });
+        let [x, y, z] = orient(point, angles, roll);
+        (centre + Vec2::new(x, y), z)
+    });
+    let mut faces = [
+        ([0, 1, 3, 2], 2, 0.58),
+        ([4, 6, 7, 5], 2, 0.88),
+        ([0, 4, 5, 1], 1, 0.58),
+        ([2, 3, 7, 6], 1, 0.88),
+        ([0, 2, 6, 4], 0, 0.58),
+        ([1, 5, 7, 3], 0, 0.88),
+    ];
+    let depth = |face: [usize; 4]| face.iter().map(|&index| cube[index].1).sum::<f32>();
+    faces.sort_by(|a, b| depth(b.0).total_cmp(&depth(a.0)));
+    for (face, axis, shade) in faces {
+        let mut points = face.map(|i| cube[i].0);
+        let a = points[1] - points[0];
+        let b = points[2] - points[0];
+        let area = a.x * b.y - a.y * b.x;
+        if area.abs() < 0.01 {
+            continue;
+        }
+        if area < 0.0 {
+            points.reverse();
+        }
+        shapes.push(Shape::convex_polygon(
+            points.to_vec(),
+            theme::BG_RAISED.lerp_to_gamma(colours[axis], shade),
+            EStroke::new(0.9, theme::ACCENT_SELECT.gamma_multiply(0.82)),
+        ));
+    }
+    shapes.extend(ring_shapes(true));
+    shapes.push(Shape::circle_filled(centre, 2.0, theme::ACCENT_SELECT));
+    let busy = response.contains_pointer() || response.dragged() || response.drag_stopped();
+    if response.drag_stopped() {
+        ui.data_mut(|data| data.remove::<Option<RingDrag>>(drag_id));
+        if active.is_some() {
+            s.end_gesture();
+        }
+    }
+    response.on_hover_text(match hover {
+        Some(0) => "Rotate the peg around X",
+        Some(1) => "Rotate the peg around Y",
+        Some(_) => "Rotate the peg around Z",
+        None => "Drag an axis ring to rotate the peg",
+    });
+    (busy, shapes)
+}
+
+/// Scene units to screen points. The canvas rect places the centre.
 fn view_transform(state: &CanvasState, rect: Rect) -> Affine {
     let c = rect.center() + state.pan;
     let scale = state.zoom * state.framing;
@@ -677,6 +972,64 @@ fn dense_label(ui: &mut egui::Ui, text: impl Into<String>) {
     );
 }
 
+fn edit_onion_skin(
+    ui: &mut egui::Ui,
+    response: &egui::Response,
+    s: &mut Session,
+    transform: Affine,
+    navigating: bool,
+) {
+    let Some((_, side)) = s.onion.alignment_edit else {
+        return;
+    };
+    if navigating || !response.dragged_by(egui::PointerButton::Primary) {
+        return;
+    }
+    let Some(inverse) = transform.inverse() else {
+        return;
+    };
+    let delta = response.drag_delta();
+    if ui.input(|input| input.modifiers.shift) {
+        let (before, after) = s.onion_drawings();
+        let drawing = if side == 0 { before } else { after };
+        let Some((lo, hi)) = drawing
+            .first()
+            .and_then(|id| s.doc.drawings.get(id))
+            .and_then(select::drawing_bounds)
+        else {
+            return;
+        };
+        let Some(pointer) = response.interact_pointer_pos() else {
+            return;
+        };
+        let pivot = ((lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5);
+        let alignment = &mut s.onion.alignment[side];
+        let centre = alignment.transform().apply(pivot.0, pivot.1);
+        let local = |p: Pos2| {
+            let (x, y) = inverse.apply(p.x, p.y);
+            Vec2::new(x - centre.0, y - centre.1)
+        };
+        let (previous, current) = (local(pointer - delta), local(pointer));
+        alignment.rotation = (alignment.rotation
+            + (previous.x * current.y - previous.y * current.x)
+                .atan2(previous.dot(current))
+                .to_degrees())
+        .rem_euclid(360.0);
+        let moved = alignment.transform().apply(pivot.0, pivot.1);
+        alignment.offset[0] += centre.0 - moved.0;
+        alignment.offset[1] += centre.1 - moved.1;
+    } else {
+        let (x, y) = inverse.apply(delta.x, delta.y);
+        let alignment = &mut s.onion.alignment[side];
+        alignment.offset[0] += x - inverse.tx;
+        alignment.offset[1] += y - inverse.ty;
+    }
+}
+
+fn onion_shifted(s: &Session) -> bool {
+    s.onion.alignment != [crate::session::OnionAlignment::default(); 2]
+}
+
 /// Top toolbar (D3.5a): display options, here onion skin.
 fn top_toolbar(
     ui: &mut egui::Ui,
@@ -697,86 +1050,133 @@ fn top_toolbar(
                 // The details live in a small menu, so the bar keeps its
                 // room for view and drawing controls.
                 let summary = if s.onion.on {
-                    format!("{} | {}", s.onion.before, s.onion.after)
+                    format!(
+                        "{} | {}{}",
+                        s.onion.before,
+                        s.onion.after,
+                        if onion_shifted(s) { " · Adjusted" } else { "" }
+                    )
                 } else {
                     "Off".to_owned()
                 };
-                ui.menu_button(egui::RichText::new(summary).font(theme::dense()), |ui| {
-                    ui.set_min_width(220.0);
-                    ui.checkbox(&mut s.onion.on, "Onion skin");
-                    let counts: [(&str, Action, Action, bool); 2] = [
-                        (
-                            "Previous drawings",
-                            Action::OnionLessPrevious,
-                            Action::OnionMorePrevious,
-                            true,
-                        ),
-                        (
-                            "Next drawings",
-                            Action::OnionLessNext,
-                            Action::OnionMoreNext,
-                            false,
-                        ),
-                    ];
-                    for (label, less, more, before) in counts {
-                        ui.horizontal(|ui| {
-                            dense_label(ui, label);
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let n = if before {
-                                        s.onion.before
-                                    } else {
-                                        s.onion.after
-                                    };
-                                    if icons::button(
-                                        ui,
-                                        Icon::Plus,
-                                        false,
-                                        n < 9,
-                                        &keymap::tooltip(profile, more),
-                                    )
-                                    .clicked()
-                                    {
-                                        s.onion_step(before, 1);
-                                    }
-                                    dense_label(ui, n.to_string());
-                                    if icons::button(
-                                        ui,
-                                        Icon::Minus,
-                                        false,
-                                        n > 0,
-                                        &keymap::tooltip(profile, less),
-                                    )
-                                    .clicked()
-                                    {
-                                        s.onion_step(before, -1);
-                                    }
-                                },
-                            );
+                let settings = ui
+                    .button(egui::RichText::new(summary).font(theme::dense()))
+                    .on_hover_text("Onion skin settings");
+                egui::Popup::menu(&settings)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        ui.set_min_width(220.0);
+                        let counts: [(&str, Action, Action, bool); 2] = [
+                            (
+                                "Previous drawings",
+                                Action::OnionLessPrevious,
+                                Action::OnionMorePrevious,
+                                true,
+                            ),
+                            (
+                                "Next drawings",
+                                Action::OnionLessNext,
+                                Action::OnionMoreNext,
+                                false,
+                            ),
+                        ];
+                        for (label, less, more, before) in counts {
+                            ui.horizontal(|ui| {
+                                dense_label(ui, label);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let n = if before {
+                                            s.onion.before
+                                        } else {
+                                            s.onion.after
+                                        };
+                                        if icons::button(
+                                            ui,
+                                            Icon::Plus,
+                                            false,
+                                            n < 9,
+                                            &keymap::tooltip(profile, more),
+                                        )
+                                        .clicked()
+                                        {
+                                            s.onion_step(before, 1);
+                                        }
+                                        dense_label(ui, n.to_string());
+                                        if icons::button(
+                                            ui,
+                                            Icon::Minus,
+                                            false,
+                                            n > 0,
+                                            &keymap::tooltip(profile, less),
+                                        )
+                                        .clicked()
+                                        {
+                                            s.onion_step(before, -1);
+                                        }
+                                    },
+                                );
+                            });
+                        }
+                        let mut percent = s.onion.opacity * 100.0;
+                        if symphony_ui::widgets::precise_slider(
+                            ui,
+                            egui::Slider::new(&mut percent, 5.0..=100.0)
+                                .step_by(1.0)
+                                .suffix("%")
+                                .text("Opacity"),
+                        )
+                        .changed()
+                        {
+                            s.onion.opacity = percent / 100.0;
+                        }
+                        ui.separator();
+                        if ui.button("Align onion skins").clicked() {
+                            s.begin_onion_alignment();
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(onion_shifted(s), egui::Button::new("Reset alignment"))
+                            .clicked()
+                        {
+                            s.onion.alignment = Default::default();
+                        }
+                        if drawing_only {
+                            ui.separator();
+                            ui.checkbox(&mut s.light_table, "Light table")
+                                .on_hover_text("Show the other layers' drawings faintly");
+                        }
+                    });
+                if let Some((original, mut side)) = s.onion.alignment_edit {
+                    let enter = !ui.ctx().text_edit_focused()
+                        && ui.input_mut(|input| {
+                            input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
                         });
-                    }
-                    let mut percent = s.onion.opacity * 100.0;
-                    if symphony_ui::widgets::precise_slider(
-                        ui,
-                        egui::Slider::new(&mut percent, 5.0..=100.0)
-                            .step_by(1.0)
-                            .suffix("%")
-                            .text("Opacity"),
-                    )
-                    .changed()
-                    {
-                        s.onion.opacity = percent / 100.0;
-                    }
+                    let escape = ui.input_mut(|input| {
+                        input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                    });
                     ui.separator();
-                    ui.checkbox(&mut s.light_table, "Light table")
-                        .on_hover_text(
-                            "Show the other layers' drawings faintly behind the one you're drawing",
-                        );
-                    dense_label(ui, "Tints: Preferences, Canvas");
-                });
+                    ui.add_enabled_ui(s.onion.before > 0, |ui| {
+                        ui.selectable_value(&mut side, 0, "Previous")
+                    });
+                    ui.add_enabled_ui(s.onion.after > 0, |ui| {
+                        ui.selectable_value(&mut side, 1, "Next")
+                    });
+                    let done = ui
+                        .button("Done")
+                        .on_hover_text("Drag to move, Shift-drag to rotate. Enter to finish.");
+                    if escape {
+                        s.onion.alignment = original;
+                        s.onion.alignment_edit = None;
+                    } else if enter || done.clicked() {
+                        s.onion.alignment_edit = None;
+                    } else {
+                        s.onion.alignment_edit = Some((original, side));
+                    }
+                }
                 ui.add_space(10.0);
                 art_layer_toolbar(ui, s, profile);
+                s.guides.menu(ui);
                 if !drawing_only {
                     bars_menu(ui, s);
                     ui.toggle_value(render_effects, "Render effects")
@@ -981,7 +1381,7 @@ pub fn ui(
         )
     });
     let middle = response.dragged_by(egui::PointerButton::Middle);
-    let navigating = space || middle || s.tool == Tool::Hand;
+    let navigating = space || middle || s.tool == Tool::Hand && s.onion.alignment_edit.is_none();
     if response.hovered() || response.dragged() {
         if let Some(p) = response.hover_pos() {
             if zoom_delta != 1.0 {
@@ -1018,6 +1418,15 @@ pub fn ui(
     state.last_view = view.inverse().unwrap_or(Affine::IDENTITY);
     state.last_rect = Some(rect);
     let px = 1.0 / scale_of(view).max(1e-6);
+
+    let aligning = s.onion.alignment_edit.is_some();
+    let navigating_now =
+        aligning || navigating || response.drag_stopped_by(egui::PointerButton::Middle);
+    let (tilt_busy, tilt_overlay) = if navigating_now {
+        (false, Vec::new())
+    } else {
+        tilt_controls(ui, rect, s)
+    };
 
     let show_surround = drawing_only || s.doc.settings.bars.is_off();
     // D4.2: neutral surround. D3.10: the stage is paper with a soft shadow.
@@ -1062,15 +1471,29 @@ pub fn ui(
     };
 
     // Use the same depth projection as the rendered stage for ink and hit tests.
+    // Drawing tools work in local coordinates. Transform previews the same
+    // peg orientation that Camera uses without applying camera framing.
+    let drawing_peg = (drawing_only && s.tool == Tool::Transform)
+        .then(|| s.transform_peg(s.selected))
+        .flatten();
     let projected_layer = if drawing_only {
-        Some(Affine::IDENTITY)
+        Some(drawing_peg.map_or(Affine::IDENTITY, |peg| peg.transform_at(s.frame)))
     } else {
         s.doc
             .layers
             .get(s.selected)
             .and_then(|layer| s.doc.camera_transform(layer.node, s.frame))
     };
+    let drawing_front = drawing_peg
+        .filter(|peg| peg.tilt_enabled && peg.face_camera)
+        .map(|peg| {
+            let mut front = peg.clone();
+            front.tilt_enabled = false;
+            front.transform_at(s.frame)
+        });
     let layer_world = projected_layer.unwrap_or(Affine::IDENTITY);
+
+    edit_onion_skin(ui, &response, s, view.compose(layer_world), navigating);
 
     // Onion skin: neighbouring drawings of the selected layer, tinted.
     if s.onion.on && projected_layer.is_some() {
@@ -1079,7 +1502,11 @@ pub fn ui(
             CanvasColours::get(colours.onion_before),
             CanvasColours::get(colours.onion_after),
         ];
-        for (list, tint) in [(before, tints[0]), (after, tints[1])] {
+        for ((list, tint), alignment) in [(before, tints[0]), (after, tints[1])]
+            .into_iter()
+            .zip(s.onion.alignment)
+        {
+            let transform = view.compose(layer_world).compose(alignment.transform());
             for (k, d) in list.iter().enumerate().rev() {
                 let alpha = s.onion.opacity.clamp(0.05, 1.0) / (k as f32 + 1.0);
                 if let Some(dr) = s.doc.drawings.get(d) {
@@ -1089,7 +1516,7 @@ pub fn ui(
                             &painter,
                             f,
                             tint.gamma_multiply(alpha * 0.35),
-                            view.compose(layer_world),
+                            transform,
                         );
                     }
                     for st in &dr.strokes {
@@ -1099,7 +1526,7 @@ pub fn ui(
                             &s.doc.textures,
                             st,
                             tint.gamma_multiply(alpha),
-                            view.compose(layer_world),
+                            transform,
                         );
                     }
                 }
@@ -1160,10 +1587,14 @@ pub fn ui(
     // Drawings bent by Mesh Warps: (drawing, its warp).
     // (drawing, its warp, projection for both vector and raster artwork)
     let mut warps: Vec<(Id, std::sync::Arc<symphony_core::warp::Warp>, Affine)> = Vec::new();
+    let mut facing_planes = Vec::new();
+    if let Some(front) = drawing_front {
+        facing_planes.push((s.selected, front));
+    }
     let items: Vec<select::Item> = if drawing_only {
         s.doc
             .exposed(s.selected, s.frame)
-            .map(|d| vec![(s.selected, d, Affine::IDENTITY)])
+            .map(|d| vec![(s.selected, d, layer_world)])
             .unwrap_or_default()
     } else {
         camera_commands
@@ -1178,7 +1609,10 @@ pub fn ui(
                 }
                 let layer = s.doc.layers.iter().position(|l| l.node == item.node)?;
                 let plane = s.doc.project_plane(s.frame, item.depth)?;
-                let transform = plane.compose(item.transform);
+                let transform = plane.compose(item.image_transform.unwrap_or(item.transform));
+                if item.image_transform.is_some() && item.warp.is_none() {
+                    facing_planes.push((layer, plane.compose(item.transform)));
+                }
                 if let Some(w) = &item.warp {
                     warps.push((item.drawing, w.clone(), plane));
                 }
@@ -1201,7 +1635,7 @@ pub fn ui(
         state
             .bent
             .retain(|d, _| warps.iter().any(|(w, _, _)| w == d));
-        for (_, d, m) in &items {
+        for (layer, d, m) in &items {
             let Some(original) = s.doc.drawings.get(d) else {
                 continue;
             };
@@ -1229,6 +1663,10 @@ pub fn ui(
                 }
                 None => (original, world),
             };
+            let facing = facing_planes
+                .iter()
+                .find(|(index, _)| index == layer)
+                .map(|(_, m)| view.compose(*m));
             // The sketch always shows (faint unless it's being drawn on).
             let sketch = s.sketch_opacity();
             for art in ArtLayer::STACK {
@@ -1280,11 +1718,13 @@ pub fn ui(
                         }
                         _ => world,
                     };
+                    let (projected, transform) =
+                        symphony_vector::projected_stroke(st, transform, facing);
                     paint_stroke(
                         &painter,
                         &mut state.strokes,
                         &s.doc.textures,
-                        st,
+                        &projected,
                         colour(s, st.swatch),
                         transform,
                     );
@@ -1361,15 +1801,16 @@ pub fn ui(
         {
             let m = view.compose(layer_world);
             for (id, i) in &s.line_points {
-                let Some(p) = d
-                    .strokes
-                    .iter()
-                    .find(|st| st.id == *id)
-                    .and_then(|st| st.points.get(*i))
-                else {
+                let Some(p) = d.strokes.iter().find(|st| st.id == *id).and_then(|st| {
+                    if st.shape.is_empty() {
+                        st.points.get(*i).map(|p| [p.x, p.y])
+                    } else {
+                        st.shape.iter().flatten().nth(*i).copied()
+                    }
+                }) else {
                     continue;
                 };
-                let at = to_pos(m.apply(p.x, p.y));
+                let at = to_pos(m.apply(p[0], p[1]));
                 painter.circle_filled(at, 4.5, theme::BG_BASE);
                 painter.circle_filled(at, 3.0, theme::ACCENT_SELECT);
             }
@@ -1379,10 +1820,10 @@ pub fn ui(
         super::rig_edit::draw_rest_guide(&painter, s, view);
     }
     state.select.camera_space = !drawing_only;
-    let navigating_now = navigating || response.drag_stopped_by(egui::PointerButton::Middle);
-    let warp_busy = !navigating_now
+    let warp_busy = !tilt_busy
+        && !navigating_now
         && super::warp_edit::ui(ui, &response, &painter, s, &mut state.warp_edit, view);
-    let rig_busy = if !navigating_now && !drawing_only {
+    let rig_busy = if !tilt_busy && !navigating_now && !drawing_only {
         super::rig_edit::ui(ui, &response, &painter, s, &mut state.rig_edit, view)
     } else {
         super::rig_edit::finish(s, &mut state.rig_edit);
@@ -1391,6 +1832,7 @@ pub fn ui(
     if matches!(s.tool, Tool::Select | Tool::Transform)
         && !navigating_now
         && !warp_busy
+        && !tilt_busy
         && !rig_busy
     {
         select::ui(ui, &response, &painter, s, &mut state.select, view, &items);
@@ -1539,8 +1981,10 @@ pub fn ui(
                         LineMode::Select
                     } else if !s.line_points.is_empty() {
                         LineMode::MoveSelected
-                    } else {
+                    } else if s.line_sculpt == crate::session::LineSculpt::Push {
                         LineMode::Push
+                    } else {
+                        LineMode::Sculpt(s.line_sculpt)
                     };
                     if mode == LineMode::Select {
                         let r =
@@ -1590,6 +2034,7 @@ pub fn ui(
                         x,
                         y,
                         pressure: pressure_curve(sm.pressure, s.pressure_gamma),
+                        width_offset: 0.0,
                         pen: symphony_core::stroke::Pen::from_tilt(
                             sm.tilt_x,
                             sm.tilt_y,
@@ -1660,6 +2105,7 @@ pub fn ui(
                         x,
                         y,
                         pressure: pressure_curve(sm.pressure, s.pressure_gamma),
+                        width_offset: 0.0,
                         pen: symphony_core::stroke::Pen::from_tilt(
                             sm.tilt_x,
                             sm.tilt_y,
@@ -1678,14 +2124,14 @@ pub fn ui(
                     erase_at(s, state, (sx, sy), r);
                 } else if let Some(le) = state.line_edit.as_mut() {
                     let r = s.line_edit_radius * size_unit(s, px) / scale_of(layer_world).max(1e-6);
-                    line_step(s, le, (sx, sy), r);
+                    line_step(s, le, (sx, sy), r, sm.pressure);
                 }
             }
             Phase::Up => {
                 if let Some(mut le) = state.line_edit.take() {
                     // The last stretch, up to where the pen lifted.
                     let r = s.line_edit_radius * size_unit(s, px) / scale_of(layer_world).max(1e-6);
-                    line_step(s, &mut le, (sx, sy), r);
+                    line_step(s, &mut le, (sx, sy), r, sm.pressure);
                     match le.mode {
                         LineMode::Push if le.moved => {
                             // Slim the pushed lines back to the detail setting.
@@ -1695,7 +2141,9 @@ pub fn ui(
                         }
                         // A click without dragging clears the point selection.
                         LineMode::MoveSelected if !le.moved => s.line_points.clear(),
-                        LineMode::MoveSelected => s.line_edit_finish(le.drawing, 0.0),
+                        LineMode::MoveSelected | LineMode::Sculpt(_) => {
+                            s.line_edit_finish(le.drawing, 0.0)
+                        }
                         _ => s.end_gesture(),
                     }
                 }
@@ -1740,6 +2188,7 @@ pub fn ui(
                             x,
                             y,
                             pressure,
+                            width_offset: 0.0,
                             pen,
                         },
                         a.min_step,
@@ -1797,7 +2246,7 @@ pub fn ui(
     } else {
         None
     };
-    if let Some(hint) = hint.filter(|_| drawing_only) {
+    if let Some(hint) = hint.filter(|_| drawing_only && !aligning) {
         painter.text(
             rect.left_top() + Vec2::new(10.0, 8.0),
             Align2::LEFT_TOP,
@@ -1807,22 +2256,36 @@ pub fn ui(
         );
     }
 
+    s.guides.paint(&painter, view, w, h);
     let pen_eraser = samples.last().is_some_and(|l| l.tool == PenTool::Eraser);
-    draw_cursor(
-        ui,
-        &response,
-        rect,
-        s,
-        Mods {
-            space: space || middle,
-            shift,
-            alt,
-            pen_eraser,
-            locked,
-            hint: state.select.hover,
-            screen_per_size: size_unit(s, px) / px,
-        },
-    );
+    if aligning {
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+        }
+        painter.text(
+            rect.center_top() + Vec2::new(0.0, 8.0),
+            Align2::CENTER_TOP,
+            "Drag to move   Shift-drag to rotate   Enter to finish",
+            theme::dense(),
+            theme::TEXT_PRIMARY,
+        );
+    } else {
+        draw_cursor(
+            ui,
+            &response,
+            rect,
+            s,
+            Mods {
+                space: space || middle,
+                shift,
+                alt,
+                pen_eraser,
+                locked,
+                hint: state.select.hover,
+                screen_per_size: size_unit(s, px) / px,
+            },
+        );
+    }
     if !show_surround {
         camera_render::mask_outside_stage(&painter, rect, corners);
     } else if !drawing_only {
@@ -1831,6 +2294,7 @@ pub fn ui(
             EStroke::new(1.0, theme::LINE_CONTROL),
         ));
     }
+    painter.extend(tilt_overlay);
     bottom_toolbar(ui, state, profile);
 }
 

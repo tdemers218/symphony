@@ -556,7 +556,9 @@ fn sized_button(
     tooltip: &str,
 ) -> Response {
     let enabled = enabled && ui.is_enabled();
-    let sense = if enabled {
+    let sense = if enabled && size == theme::TOOL_BUTTON {
+        Sense::click_and_drag()
+    } else if enabled {
         Sense::click()
     } else {
         Sense::hover()

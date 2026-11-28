@@ -337,12 +337,21 @@ mod tests {
     fn save_and_open_round_trip() {
         let dir = temp("roundtrip");
         let path = dir.join("Walk");
-        let s = sample();
+        let mut s = sample();
+        s.bookmarks.push(symphony_core::doc::Bookmark {
+            id: s.ids.fresh(),
+            name: "Hold".into(),
+            start: 2,
+            end: 5,
+            colour: Some([140, 180, 230]),
+            notes: "Ease into the next pose".into(),
+        });
         save(&s, &path).unwrap();
         let p = with_extension(&path);
         assert!(p.join("project.json").is_file());
         let back = open(&p).unwrap();
         assert_eq!(back.layers, s.layers);
+        assert_eq!(back.bookmarks, s.bookmarks);
         assert_eq!(project_name(&p), "Walk");
         let _ = fs::remove_dir_all(&dir);
     }

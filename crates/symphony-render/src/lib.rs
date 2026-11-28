@@ -115,6 +115,7 @@ pub fn render_drawing_thumbnails(
             column,
             drawing,
             transform: Affine::IDENTITY,
+            image_transform: None,
             depth: 0.0,
             matte_pass: false,
             warp: None,
@@ -332,7 +333,12 @@ fn paint_drawing(
     let Some(project) = scene.project_plane(frame, item.depth) else {
         return;
     };
-    let m = view.compose(project).compose(item.transform);
+    let viewport = view.compose(project);
+    let facing = item
+        .image_transform
+        .filter(|_| item.warp.is_none())
+        .map(|_| viewport.compose(item.transform));
+    let m = viewport.compose(item.image_transform.unwrap_or(item.transform));
     // An imported image sits under everything else in the drawing.
     if let Some(img) = d.image {
         let transform = item
@@ -409,6 +415,7 @@ fn paint_drawing(
             d,
             art,
             m,
+            facing,
             preview.filter(|p| p.drawing == item.drawing),
         );
         if let Some(layer) = sketch_layer {
@@ -433,6 +440,7 @@ fn paint_strokes(
     d: &symphony_core::stroke::Drawing,
     art: ArtLayer,
     m: Affine,
+    facing: Option<Affine>,
     preview: Option<StrokePreview<'_>>,
 ) {
     {
@@ -453,9 +461,10 @@ fn paint_strokes(
                         Some(p) if p.strokes.contains(&st.id) => m.compose(p.transform),
                         _ => m,
                     };
+                    let (st, m) = symphony_vector::projected_stroke(st, m, facing);
                     let tip = tex.tip.and_then(|k| scene.textures.get(&k));
                     let grain = tex.grain.and_then(|k| scene.textures.get(&k));
-                    symphony_vector::stamp::rasterize(st, &tex, tip, grain, m, clip)
+                    symphony_vector::stamp::rasterize(&st, &tex, tip, grain, m, clip)
                         .map(|c| (st.id, c))
                 })
                 .collect()
@@ -469,6 +478,14 @@ fn paint_strokes(
                 Some(p) if p.strokes.contains(&st.id) => m.compose(p.transform),
                 _ => m,
             };
+            if st.texture.is_some_and(|texture| !texture.vector) {
+                if let Some(c) = stamped.get(&st.id) {
+                    composite_coverage(pix, scene, st, c);
+                }
+                continue;
+            }
+            let (projected, m) = symphony_vector::projected_stroke(st, m, facing);
+            let st = projected.as_ref();
             if let Some(tex) = st.texture.filter(|t| t.vector) {
                 // A vector brush: its merged stamp shapes, filled solid.
                 let tip = tex.tip.and_then(|k| scene.textures.get(&k));
@@ -499,12 +516,6 @@ fn paint_strokes(
                         Transform::identity(),
                         None,
                     );
-                }
-                continue;
-            }
-            if st.texture.is_some() {
-                if let Some(c) = stamped.get(&st.id) {
-                    composite_coverage(pix, scene, st, c);
                 }
                 continue;
             }
@@ -891,12 +902,14 @@ mod tests {
                     x: -50.0,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
                 Point {
                     x: 50.0,
                     y: 0.0,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 },
             ],

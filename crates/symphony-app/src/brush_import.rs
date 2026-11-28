@@ -326,6 +326,7 @@ mod tests {
                             x: -880.0 + col * 900.0 + t * 780.0,
                             y: y + (t * std::f32::consts::TAU).sin() * 20.0,
                             pressure: (t * std::f32::consts::PI).sin().max(0.15),
+                            width_offset: 0.0,
                             pen: Default::default(),
                         }
                     })

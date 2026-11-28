@@ -760,6 +760,86 @@ fn selected_brush_properties(ui: &mut egui::Ui, s: &mut Session, presets: &Prese
     }
 }
 
+pub fn undo_history(ui: &mut egui::Ui, s: &mut Session) {
+    let current = s.history.undo_len();
+    let mut target = None;
+    egui::Frame::new()
+        .inner_margin(theme::CARD_PAD)
+        .show(ui, |ui| {
+            if s.history.entries().next().is_none() {
+                ui.label("No edits in this session.");
+                return;
+            }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for (index, name) in std::iter::once("Before retained edits")
+                        .chain(s.history.entries())
+                        .enumerate()
+                    {
+                        if ui.selectable_label(index == current, name).clicked() {
+                            target = Some(index);
+                        }
+                    }
+                });
+        });
+    if let Some(target) = target {
+        for _ in target..current {
+            s.undo();
+        }
+        for _ in current..target {
+            s.redo();
+        }
+    }
+}
+
+pub(super) fn rotation_3d(ui: &mut egui::Ui, s: &mut Session) {
+    let Some(peg) = s.transform_peg(s.selected) else {
+        return;
+    };
+    let mut enabled = peg.tilt_enabled;
+    let mut face_camera = peg.face_camera;
+    let mut angles = peg
+        .tilt
+        .as_ref()
+        .map_or([0.0; 2], |tilt| [tilt[0].at(s.frame), tilt[1].at(s.frame)]);
+    let lock = s.doc.column(s.selected).is_some_and(|column| column.locked);
+    ui.add_enabled_ui(!lock, |ui| {
+        if widgets::checkbox(ui, &mut enabled, "3D rotation").changed() {
+            s.set_selected_peg_tilt(enabled, angles);
+            s.end_gesture();
+        }
+        if enabled {
+            if widgets::checkbox(ui, &mut face_camera, "Face Camera")
+                .on_hover_text("Tilt the stroke path while keeping its width facing Camera.")
+                .changed()
+            {
+                s.set_selected_peg_face_camera(face_camera);
+            }
+            ui.horizontal_wrapped(|ui| {
+                for (axis, label) in ["X ", "Y "].into_iter().enumerate() {
+                    let response = ui.add(
+                        egui::DragValue::new(&mut angles[axis])
+                            .prefix(label)
+                            .suffix("°")
+                            .range(-180.0..=180.0),
+                    );
+                    if response.changed() {
+                        s.set_selected_peg_tilt(true, angles);
+                    }
+                    if response.drag_stopped() || response.lost_focus() {
+                        s.end_gesture();
+                    }
+                }
+            });
+        }
+    });
+    hint(
+        ui,
+        "Drag an axis ring on the canvas to rotate the peg. To move in depth, use 3D View.",
+    );
+}
+
 pub fn tool_properties(
     ui: &mut egui::Ui,
     s: &mut Session,
@@ -861,6 +941,10 @@ fn tool_properties_body(
                         .on_hover_text("Draw a selection boundary to split the artwork and select the pieces inside.");
                     widgets::checkbox(ui, &mut s.show_selected_points, "Show selected points");
                     selected_brush_properties(ui, s, presets);
+                }
+
+                if !select {
+                    rotation_3d(ui, s);
                 }
 
                 widgets::segmented(
@@ -969,10 +1053,49 @@ fn tool_properties_body(
             }
             Tool::LineEditor => {
                 section(ui, "Line Editor");
+                use crate::session::LineSculpt;
+                let vertical = ui.available_width() < 244.0;
+                let mut mode = if s.line_sculpt == LineSculpt::SmoothPressure {
+                    LineSculpt::Smooth
+                } else {
+                    s.line_sculpt
+                };
+                if widgets::segmented(
+                    ui,
+                    "line-sculpt",
+                    &mut mode,
+                    &[
+                        (LineSculpt::Push, "Push"),
+                        (LineSculpt::Smooth, "Smooth"),
+                        (LineSculpt::Thicken, "Thicken"),
+                        (LineSculpt::Thin, "Thin"),
+                    ],
+                    vertical,
+                ) {
+                    s.line_sculpt = mode;
+                    s.line_points.clear();
+                }
+
+                if matches!(
+                    s.line_sculpt,
+                    LineSculpt::Smooth | LineSculpt::SmoothPressure
+                ) {
+                    widgets::segmented(
+                        ui,
+                        "smooth-target",
+                        &mut s.line_sculpt,
+                        &[
+                            (LineSculpt::Smooth, "Path"),
+                            (LineSculpt::SmoothPressure, "Pressure"),
+                        ],
+                        false,
+                    );
+                }
+
                 size_slider(ui, "Radius", &mut s.line_edit_radius, 200.0);
                 s.line_edit_radius = s.line_edit_radius.max(1.0);
                 slider(ui, "Strength", &mut s.line_edit_strength, 0.05..=1.0);
-                hint(ui, "Drag to push the lines under the brush: points in the middle move most and the effect fades out towards the edge.");
+                hint(ui, "Drag over lines. Thicken and Thin change local width without moving the path or changing pressure.");
                 ui.add_space(4.0);
                 hint(ui, "Shift-drag to paint over points and select them. Then drag to move only those points.");
                 let n = s.line_points.len();

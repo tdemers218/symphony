@@ -135,9 +135,15 @@ fn stamp_parallel(
     // Where the stroke can reach on screen: its points' bounds, widened by
     // its widest stamp and any scatter.
     let k = scale_of(m);
-    let reach =
-        stroke.max_width.max(stroke.min_width) * k * (0.75 + tex.dynamics.scatter.clamp(0.0, 10.0))
-            + 2.0;
+    let reach = (stroke.max_width.max(stroke.min_width)
+        + stroke
+            .points
+            .iter()
+            .map(|p| p.width_offset)
+            .fold(0.0_f32, f32::max))
+        * k
+        * (0.75 + tex.dynamics.scatter.clamp(0.0, 10.0))
+        + 2.0;
     let mut b = [
         f32::INFINITY,
         f32::INFINITY,
@@ -341,19 +347,14 @@ impl Stamper {
                 spacing * w
             }
         };
-        let (lo, hi) = (stroke.min_width, stroke.max_width);
         let new: Vec<([f32; 2], f32, f32, Pen)> = stroke
             .points
             .iter()
             .skip(self.done)
             .map(|p| {
                 let (x, y) = self.m.apply(p.x, p.y);
-                (
-                    [x, y],
-                    ((lo + (hi - lo) * tex.size_at(p.pressure)) * k).max(0.0),
-                    p.pressure,
-                    p.pen,
-                )
+                let width = (stroke.width_at(tex.size_at(p.pressure)) + p.width_offset).max(0.0);
+                ([x, y], width * k, p.pressure, p.pen)
             })
             .collect();
         self.done = stroke.points.len();
@@ -741,6 +742,7 @@ mod tests {
                     x,
                     y,
                     pressure: 1.0,
+                    width_offset: 0.0,
                     pen: Default::default(),
                 })
                 .collect(),
@@ -898,6 +900,7 @@ mod tests {
                 x: i as f32 * 25.0,
                 y: (i as f32 * 0.4).sin() * 30.0,
                 pressure: 1.0,
+                width_offset: 0.0,
                 pen: Default::default(),
             })
             .collect();
@@ -1012,6 +1015,7 @@ mod tests {
                 x: i as f32 * 5.0,
                 y: (i as f32 * 0.02).sin() * 400.0 + 500.0,
                 pressure: 0.3 + 0.7 * (i as f32 * 0.05).sin().abs(),
+                width_offset: 0.0,
                 pen: Default::default(),
             })
             .collect();
