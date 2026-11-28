@@ -1039,7 +1039,7 @@ impl ChartCurve {
 /// segments (a straight segment or a corner ends the smooth run).
 /// Points drawn in a stroke this many times over, evenly spaced, then
 /// smoothed: enough for any hand-drawn arc, light to store.
-const DRAWN_POINTS: usize = 48;
+const DRAWN_POINTS: usize = 96;
 
 /// `line` evenly spaced: `n` points the same distance apart along it,
 /// first and last kept.
@@ -1117,6 +1117,29 @@ fn fit_beziers(points: &[[f32; 2]]) -> Vec<[[f32; 2]; 4]> {
     out
 }
 
+/// The tightest bend along a polyline: turning per unit of length.
+fn sharpest_bend(line: &[[f32; 2]]) -> f32 {
+    line.windows(3)
+        .map(|w| {
+            let (a, b) = (sub2(w[1], w[0]), sub2(w[2], w[1]));
+            let length = (a[0].hypot(a[1]) + b[0].hypot(b[1])) / 2.0;
+            let turn = (a[0] * b[1] - a[1] * b[0]).atan2(dot2(a, b)).abs();
+            if length > 1e-6 {
+                turn / length
+            } else {
+                0.0
+            }
+        })
+        .fold(0.0, f32::max)
+}
+
+/// `n` points along a cubic, evenly in its parameter.
+fn sample_cubic(b: &[[f32; 2]; 4], n: usize) -> Vec<[f32; 2]> {
+    (0..n)
+        .map(|i| bezier(b, i as f32 / (n - 1) as f32))
+        .collect()
+}
+
 fn sub2(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
     [a[0] - b[0], a[1] - b[1]]
 }
@@ -1157,6 +1180,41 @@ fn fit_cubic(
         simple(out);
         return;
     }
+    // One cubic bends through half a turn at most: asked for more, as in
+    // a loop drawn in one go, it pinches into a point. Split where the
+    // stroke has turned halfway.
+    if depth <= 12 && n >= 5 {
+        let turns: Vec<f32> = pts
+            .windows(3)
+            .map(|w| {
+                let (a, b) = (sub2(w[1], w[0]), sub2(w[2], w[1]));
+                (a[0] * b[1] - a[1] * b[0]).atan2(dot2(a, b)).abs()
+            })
+            .collect();
+        let total: f32 = turns.iter().sum();
+        if total > std::f32::consts::PI {
+            let mut so_far = 0.0;
+            let half = turns
+                .iter()
+                .position(|t| {
+                    so_far += t;
+                    so_far >= total / 2.0
+                })
+                .map_or(n / 2, |i| i + 1)
+                .clamp(2, n - 3);
+            let centre = unit(sub2(pts[half - 1], pts[half + 1]));
+            fit_cubic(&pts[..=half], t1, centre, tolerance, depth + 1, out);
+            fit_cubic(
+                &pts[half..],
+                [-centre[0], -centre[1]],
+                t2,
+                tolerance,
+                depth + 1,
+                out,
+            );
+            return;
+        }
+    }
     // Chord-length parameters.
     let mut u = vec![0.0f32; n];
     for i in 1..n {
@@ -1166,7 +1224,13 @@ fn fit_cubic(
     u.iter_mut().for_each(|v| *v /= total);
     let mut bez = least_squares(pts, &u, t1, t2);
     let (mut worst, mut split) = max_error(pts, &bez, &u);
-    if worst < tolerance {
+    // Close isn't enough: a cubic can stay near the stroke yet bend far
+    // tighter somewhere, a pinch the eye sees at once.
+    let sharpest = sharpest_bend(pts);
+    let fits = |bez: &[[f32; 2]; 4], worst: f32| {
+        worst < tolerance && sharpest_bend(&sample_cubic(bez, 48)) <= sharpest * 1.3 + 1e-4
+    };
+    if fits(&bez, worst) {
         out.push(bez);
         return;
     }
@@ -1177,7 +1241,7 @@ fn fit_cubic(
             }
             bez = least_squares(pts, &u, t1, t2);
             (worst, split) = max_error(pts, &bez, &u);
-            if worst < tolerance {
+            if fits(&bez, worst) {
                 out.push(bez);
                 return;
             }
@@ -1985,6 +2049,35 @@ mod tests {
             .atan2(before[0] * after[0] + before[1] * after[1])
             .to_degrees();
         assert!(angle.abs() < 4.0, "a {angle}° corner");
+    }
+
+    /// A stroke with a loop in it stays a smooth loop: no fitted curve
+    /// folds back on itself into a point.
+    #[test]
+    fn a_drawn_loop_stays_smooth() {
+        let mut c = Chart::default();
+        let a = c.set_point(1, [-720.0, -200.0], Role::Key);
+        c.set_point(8, [-470.0, 250.0], Role::Key);
+        let stroke: Vec<[f32; 2]> = (0..=80)
+            .map(|i| {
+                let t = i as f32 / 80.0;
+                let a = t * std::f32::consts::TAU;
+                [
+                    -720.0 + t * 250.0 + 150.0 * a.sin(),
+                    -200.0 + t * 450.0 - 150.0 * (1.0 - a.cos()),
+                ]
+            })
+            .collect();
+        assert!(c.set_drawn(a, &stroke));
+        let controls = denormalise(&c.points[0].drawn, c.points[0].pos, c.points[1].pos).unwrap();
+        let line = tessellate(&controls);
+        // No tighter than the hand drew it (a little slack for smoothing).
+        let drawn = sharpest_bend(&resample(&stroke, 200));
+        let fitted = sharpest_bend(&line);
+        assert!(
+            fitted <= drawn * 1.3,
+            "the loop pinches: bends {fitted} per unit where the stroke bends {drawn}"
+        );
     }
 
     /// Recording timing from the stroke: drawn slowly then faster, the
