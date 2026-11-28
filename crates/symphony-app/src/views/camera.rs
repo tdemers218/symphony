@@ -1921,12 +1921,26 @@ pub fn ui(
         super::rig_edit::draw_rest_guide(&painter, s, view);
     }
     state.select.camera_space = !drawing_only;
-    // Charts live in stage space, so they show in Camera (not in a
-    // drawing's own space).
+    // Charts live in stage space. Camera shows the stage plane; Drawing
+    // shows the selected drawing's own space, so a chart is seen there
+    // through the inverse of where that drawing is on the stage.
+    let chart_space = if drawing_only {
+        s.doc
+            .layers
+            .get(s.selected)
+            .and_then(|layer| s.doc.graph.world_transform(layer.node, s.frame).ok())
+            .and_then(|world| world.inverse())
+            .map(|to_local| view.compose(layer_world).compose(to_local))
+    } else {
+        s.doc
+            .project_plane(s.frame, 0.0)
+            .map(|plane| view.compose(plane))
+    };
     let chart_busy = !tilt_busy
         && !navigating_now
-        && !drawing_only
-        && super::chart_edit::ui(ui, &response, &painter, s, &mut state.chart_edit, view);
+        && chart_space.is_some_and(|space| {
+            super::chart_edit::ui(ui, &response, &painter, s, &mut state.chart_edit, space)
+        });
     let warp_busy = !tilt_busy
         && !navigating_now
         && !chart_busy

@@ -233,26 +233,23 @@ impl ChartEdit {
     }
 }
 
-/// Draw every visible chart and edit the selected one. Returns true while
-/// a chart takes the Transform tool's clicks (so they don't select or move
-/// artwork).
+/// Draw every visible chart and edit the selected one; `m` takes stage
+/// space to the screen (Camera's stage plane, or a drawing's own space in
+/// the Drawing view). Returns true while a chart takes the Transform
+/// tool's clicks (so they don't select or move artwork).
 pub fn ui(
     ui: &egui::Ui,
     response: &egui::Response,
     painter: &egui::Painter,
     s: &mut Session,
     state: &mut ChartEdit,
-    view: Affine,
+    m: Affine,
 ) -> bool {
     state.refresh(s);
     if state.built.is_empty() {
         state.dragging = None;
         return false;
     }
-    let Some(plane) = s.doc.project_plane(s.frame, 0.0) else {
-        return false;
-    };
-    let m = view.compose(plane);
     let screen = |p: [f32; 2]| {
         let (x, y) = m.apply(p[0], p[1]);
         Pos2::new(x, y)
