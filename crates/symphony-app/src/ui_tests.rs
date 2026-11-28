@@ -734,6 +734,79 @@ fn perf_gate(what: &str, took: std::time::Duration, budget_ms: f32) {
     );
 }
 
+/// Cost of Smart Charts in a large project: 40 layers following 10
+/// charts of 60 eased points each. Building one curve, a frame of
+/// playback (every layer's transform), and the first frame after an edit
+/// to one chart. Gated in `scripts/perf.sh`:
+/// `cargo test --release -p symphony-app chart_cost -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn chart_cost() {
+    use symphony_core::chart::{Chart, ChartCurve, Role};
+    use symphony_core::graph::NodeKind;
+    let mut s = crate::session::Session::new_scene();
+    s.set_length(120);
+    for _ in 0..39 {
+        s.add_layer();
+    }
+    let charts: Vec<_> = (0..10)
+        .map(|k| {
+            let mut c = Chart::default();
+            for i in 0..60u32 {
+                let t = i as f32 * 0.4 + k as f32;
+                c.set_point(
+                    1 + i * 2,
+                    [t.cos() * 300.0 + i as f32 * 10.0, t.sin() * 200.0],
+                    Role::Key,
+                );
+            }
+            for p in &mut c.points {
+                p.timing.ease_out = 0.6;
+                p.timing.ease_in = 0.4;
+            }
+            c.set_rotation(1, 0.0);
+            c.set_rotation(119, 720.0);
+            s.doc.graph.add("Chart", NodeKind::Chart(Box::new(c)))
+        })
+        .collect();
+    for layer in 0..s.layer_count() {
+        assert!(s.set_layer_chart(layer, Some(charts[layer % charts.len()])));
+    }
+    let chart = match &s.doc.graph.node(charts[0]).unwrap().kind {
+        NodeKind::Chart(c) => (**c).clone(),
+        _ => unreachable!(),
+    };
+    let start = std::time::Instant::now();
+    for _ in 0..100 {
+        std::hint::black_box(ChartCurve::new(&chart));
+    }
+    let build = start.elapsed() / 100;
+    println!("chart_cost: {build:?} to build a 60-point chart");
+    perf_gate("building a 60-point chart", build, 1.0);
+    let nodes: Vec<_> = s.doc.layers.iter().map(|l| l.node).collect();
+    let frame = |s: &crate::session::Session, f: u32| {
+        for &n in &nodes {
+            std::hint::black_box(s.doc.graph.world_transform(n, f).unwrap());
+        }
+    };
+    frame(&s, 1);
+    let start = std::time::Instant::now();
+    for f in 1..=120 {
+        frame(&s, f);
+    }
+    let play = start.elapsed() / 120;
+    println!("chart_cost: {play:?} per frame for 40 layers on 10 charts");
+    perf_gate("a frame of 40 layers following charts", play, 1.0);
+    crate::views::chart_edit::edit(&mut s, charts[0], "Move", None, |c| {
+        c.points[10].pos[0] += 5.0
+    });
+    let start = std::time::Instant::now();
+    frame(&s, 30);
+    let edited = start.elapsed();
+    println!("chart_cost: {edited:?} for the first frame after editing a chart");
+    perf_gate("the first frame after a chart edit", edited, 2.0);
+}
+
 /// Cost of the eraser on a busy page of brush strokes and fills. Not
 /// pass/fail: `cargo test --release -p symphony-app erase_cost -- --ignored --nocapture`.
 #[test]

@@ -10,4 +10,5 @@ cd "$(dirname "$0")/.."
 export SYMPHONY_PERF_GATE=1
 nice -n 10 cargo test -q --release -p symphony-vector stamped_cost -- --ignored --nocapture
 nice -n 10 cargo test -q --release -p symphony-app erase_cost -- --ignored --nocapture --test-threads=1
+nice -n 10 cargo test -q --release -p symphony-app chart_cost -- --ignored --nocapture --test-threads=1
 echo "Timing checks passed."

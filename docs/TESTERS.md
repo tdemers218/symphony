@@ -143,6 +143,41 @@ Bones can be animated without artwork and are excluded from exports.
 Vector artwork bends at the joint. Imported pictures follow their bone
 as rigid artwork.
 
+## Animate with Smart Charts
+
+A Smart Chart is an animator's timing chart that moves artwork. Search
+**Add Smart Chart**. The chart is selected and the Transform tool is on.
+
+- **Place it.** Go to a key frame and click where the artwork is. Do the
+  same on the next key. A smooth path runs through the points, with a
+  tick for every frame between them: close ticks are slow, far apart
+  ones fast. A point between two keys is a **breakdown** (drawn as a
+  ring).
+- **Shape and time it.** Drag a point to move it. On a point's frame,
+  its white handles bend the path (Alt-drag for a sharp turn) and the
+  card in the corner has Key / Breakdown, Smooth / Corner / Handles,
+  **Slow in**, **Slow out**, **Hold** and **Straight**. Slide any tick
+  along the path to change where the chart is on that frame. **Even
+  spacing** clears the eases and slid ticks around the point.
+- **Turn and scale.** On a point's frame, drag the round knob on the
+  needle to turn (Shift snaps 15°) and the square along it to scale.
+  The card has exact Rotation and Scale fields: 720° is two full turns.
+- **Make artwork follow it.** Tick **<layer> follows this chart** on
+  the card, or search **Follow Smart Chart**. The layer's peg then
+  moves along the chart; on the chart's first frame the artwork stays
+  where you drew it. Rotation and Scale can be turned off in the peg's
+  properties. In Node view, a chart connects to a peg's diamond
+  **Motion** port, and one chart can drive several pegs.
+- **Retime it.** Drag the chart's coloured bar on its Timeline track to
+  move the whole chart earlier or later. **Insert in-betweens** stretches
+  it with the scene. While the chart is edited, **Copy**, **Paste**,
+  **Cut** and **Delete** act on the point on the current frame; Copy
+  between points takes where the chart is.
+
+Charts show in Camera and Drawing view and never appear in exports.
+Click **Done** on the card to go back to your layer; the chart stays,
+drawn quietly.
+
 ## Timeline keys and frames
 
 In Timeline, press **K** or click the diamond-plus button to set a

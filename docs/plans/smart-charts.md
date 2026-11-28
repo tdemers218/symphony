@@ -88,7 +88,16 @@ Timing { hold, ease_out, ease_in, spacing: Vec<[t, s]> }
      Curves are shared through `chart::shared_curve`, keyed by chart content.
      Open: under a moving parent the chart overlay (drawn in stage space) and the motion (parent space) differ; show it through the parent then.
    - One chart can drive several consumers; contextual connections from search; curves cached per `doc.version`.
+     *Done for pegs:* several pegs can follow one chart. Curves are cached by content (`chart::shared_curve`) rather than by `doc.version`, so an edit elsewhere in the scene doesn't rebuild them.
 5. **Polish.** Shortcuts, search coverage, large-project timings in `scripts/perf.sh`, user documentation, a manual workflow test (three key poses; head, torso and hand charts).
+   *Done:*
+   - `chart_cost` in `scripts/perf.sh`, with 40 layers on 10 charts of 60 points (release build, 2026-11-28):
+     - about 40 µs to build a chart (budget 1 ms);
+     - about 53 µs per playback frame (budget 1 ms);
+     - about 111 µs for the first frame after an edit (budget 2 ms).
+   - User steps in `docs/TESTERS.md` ("Animate with Smart Charts").
+
+   *Open:* the manual workflow test, which needs Tristan.
 
 In-betweening, lighting, texture tracking and motion-processing nodes ([15]–[17]) come after; the Motion output is designed so they can consume or transform it.
 
