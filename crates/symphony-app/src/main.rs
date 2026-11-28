@@ -895,7 +895,12 @@ impl SymphonyApp {
                 if let Some(id) = main {
                     s.select_graph_node(id, false);
                 }
-                s.frame = 10;
+                // =point: on a point's frame, to review its card and handles.
+                s.frame = if std::env::var("SYMPHONY_SHOT_CHART").is_ok_and(|v| v == "point") {
+                    7
+                } else {
+                    10
+                };
             }
             if std::env::var_os("SYMPHONY_SHOT_PAINT").is_some() {
                 s.tool = Tool::Paint;

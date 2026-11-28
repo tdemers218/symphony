@@ -304,6 +304,73 @@ impl Chart {
         self.scale[1].set_key(frame, scale[1]);
     }
 
+    /// The point that starts the segment `frame` is strictly inside.
+    fn segment_index(&self, frame: u32) -> Option<usize> {
+        let i = self
+            .points
+            .partition_point(|p| p.frame <= frame)
+            .checked_sub(1)?;
+        (i + 1 < self.points.len() && self.points[i].frame < frame).then_some(i)
+    }
+
+    /// Put the chart `distance` (0 to 1 of its segment's length) along its
+    /// path on `frame`: a spacing mark set by the animator, as when sliding
+    /// a frame's tick along the path. It stays between the marks before and
+    /// after it, so the chart never goes back. False on a point's frame,
+    /// outside the chart, or in a held segment.
+    pub fn set_spacing(&mut self, frame: u32, distance: f32) -> bool {
+        let Some(i) = self.segment_index(frame) else {
+            return false;
+        };
+        let (a, b) = (self.points[i].frame, self.points[i + 1].frame);
+        let t = (frame - a) as f32 / (b - a) as f32;
+        let timing = &mut self.points[i].timing;
+        if timing.hold || !distance.is_finite() {
+            return false;
+        }
+        timing.spacing.retain(|k| (k[0] - t).abs() > 1e-4);
+        let lo = timing
+            .spacing
+            .iter()
+            .filter(|k| k[0] < t)
+            .map(|k| k[1])
+            .fold(0.0, f32::max);
+        let hi = timing
+            .spacing
+            .iter()
+            .filter(|k| k[0] > t)
+            .map(|k| k[1])
+            .fold(1.0, f32::min);
+        let at = timing.spacing.partition_point(|k| k[0] < t);
+        timing.spacing.insert(at, [t, distance.clamp(lo, hi)]);
+        true
+    }
+
+    /// Even spacing on both sides of point `id`: its marks and eases go.
+    pub fn even_spacing(&mut self, id: PointId) {
+        let Some(i) = self.points.iter().position(|p| p.id == id) else {
+            return;
+        };
+        for j in [i.checked_sub(1), Some(i)].into_iter().flatten() {
+            let t = &mut self.points[j].timing;
+            t.spacing.clear();
+            t.ease_in = 0.0;
+            t.ease_out = 0.0;
+        }
+    }
+
+    /// Fix point `id`'s handles where they are now (automatic ones as
+    /// computed), so they can be dragged without the curve jumping.
+    pub fn freeze_handles(&mut self, id: PointId) {
+        let curve = ChartCurve::new(self);
+        let Some(i) = self.points.iter().position(|p| p.id == id) else {
+            return;
+        };
+        if let Some(&(before, after)) = curve.handles.get(i) {
+            self.points[i].tangent = Tangent::Manual { before, after };
+        }
+    }
+
     /// Every frame the chart has something on (a point, or a scale or
     /// rotation key), for the Timeline.
     pub fn key_frames(&self) -> impl Iterator<Item = u32> + '_ {
@@ -710,6 +777,40 @@ impl ChartCurve {
         out
     }
 
+    /// How far along its segment (0 to 1 of the segment's length) the
+    /// path comes nearest to `p`, for the segment `frame` is in. For
+    /// turning a tick dragged on the canvas into spacing.
+    pub fn segment_distance(&self, frame: u32, p: [f32; 2]) -> Option<f32> {
+        let s = self
+            .segments
+            .iter()
+            .find(|s| s.from < frame && frame < s.to)?;
+        let total = s.length();
+        if total <= 1e-6 {
+            return Some(0.0);
+        }
+        let mut best = (f32::INFINITY, 0.0);
+        let mut a = s.c[0];
+        for k in 0..LUT {
+            let b = bezier(&s.c, (k + 1) as f32 / LUT as f32);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len2 = dx * dx + dy * dy;
+            let u = if len2 > 1e-12 {
+                (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let q = [a[0] + dx * u, a[1] + dy * u];
+            let d = (p[0] - q[0]).hypot(p[1] - q[1]);
+            if d < best.0 {
+                let along = s.lengths[k] + (s.lengths[k + 1] - s.lengths[k]) * u;
+                best = (d, along / total);
+            }
+            a = b;
+        }
+        Some(best.1)
+    }
+
     /// Each point's Bézier handles as offsets (before, after), automatic
     /// ones as computed. For drawing handles and for freezing a shape.
     pub fn handles(&self) -> &[([f32; 2], [f32; 2])] {
@@ -1087,5 +1188,51 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen, vec![1, 13, 21]);
+    }
+
+    /// A tick slid along the path sets that frame's spacing: the chart is
+    /// then exactly there on that frame, and the path doesn't move.
+    #[test]
+    fn sliding_a_tick_sets_that_frames_spacing() {
+        let mut c = Chart::default();
+        c.set_point(1, [0.0, 0.0], Role::Key);
+        c.set_point(11, [100.0, 0.0], Role::Key);
+        let path = ChartCurve::new(&c).path(8);
+        assert!(c.set_spacing(6, 0.2));
+        let curve = ChartCurve::new(&c);
+        assert_eq!(curve.path(8), path);
+        let on = curve.position(6.0).unwrap();
+        assert!((on[0] - 20.0).abs() < 0.5, "at {on:?}");
+        let d = curve.segment_distance(6, on).unwrap();
+        assert!((d - 0.2).abs() < 1e-3);
+        // Never back past an earlier mark.
+        assert!(c.set_spacing(8, 0.1));
+        let k = &c.points[0].timing.spacing;
+        assert_eq!(k.len(), 2);
+        assert!(k[1][1] >= k[0][1]);
+        // Not on a point, nor outside the chart.
+        assert!(!c.set_spacing(1, 0.5));
+        assert!(!c.set_spacing(30, 0.5));
+        c.even_spacing(c.points[1].id);
+        assert!(c.points[0].timing.spacing.is_empty());
+    }
+
+    /// Freezing a point's handles keeps the curve exactly as it was.
+    #[test]
+    fn frozen_handles_keep_the_curve() {
+        let mut c = Chart::default();
+        c.set_point(1, [0.0, 0.0], Role::Key);
+        let mid = c.set_point(7, [50.0, -60.0], Role::Key);
+        c.set_point(13, [120.0, 0.0], Role::Key);
+        let path = ChartCurve::new(&c).path(8);
+        c.freeze_handles(mid);
+        assert!(matches!(
+            c.point(mid).unwrap().tangent,
+            Tangent::Manual { .. }
+        ));
+        let after = ChartCurve::new(&c).path(8);
+        for (a, b) in path.iter().zip(&after) {
+            assert!((a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4);
+        }
     }
 }

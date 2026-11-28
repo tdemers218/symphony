@@ -2554,4 +2554,31 @@ fn a_smart_chart_is_placed_and_dragged_on_the_canvas() {
     assert!((moved[1] - 100.0).abs() < 1.0, "moved to {moved:?}");
     assert_eq!(chart(&h).points.len(), 2, "a drag adds no point");
     assert_eq!(h.state().s.history.undo_len(), undo + 1, "one undo step");
+    // Slide frame 5's tick back towards frame 1: that frame's spacing
+    // changes, no point is added.
+    let curve = symphony_core::chart::ChartCurve::new(&chart(&h));
+    let tick = curve.position(5.0).unwrap();
+    let start = h.state().canvas.to_screen(tick[0], tick[1]);
+    let back = curve.position(3.0).unwrap();
+    let end = h.state().canvas.to_screen(back[0], back[1]);
+    h.input_mut()
+        .events
+        .extend([egui::Event::PointerMoved(start), button(start, true)]);
+    h.step();
+    for i in 1..=5 {
+        let p = start + (end - start) * (i as f32 / 5.0);
+        h.input_mut().events.push(egui::Event::PointerMoved(p));
+        h.step();
+    }
+    h.input_mut().events.push(button(end, false));
+    h.run_steps(2);
+    assert_eq!(chart(&h).points.len(), 2, "sliding a tick adds no point");
+    let now = symphony_core::chart::ChartCurve::new(&chart(&h))
+        .position(5.0)
+        .unwrap();
+    let (d_now, d_back) = (
+        (now[0] - back[0]).hypot(now[1] - back[1]),
+        (tick[0] - back[0]).hypot(tick[1] - back[1]),
+    );
+    assert!(d_now < d_back * 0.3, "frame 5 slid back: {now:?}");
 }
