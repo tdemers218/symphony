@@ -2359,6 +2359,68 @@ fn a_chart_path_is_drawn_between_two_points() {
     assert_eq!(h.state().s.history.undo_len(), undo + 1, "one undo step");
 }
 
+/// With Timing on, a drawn path also records how fast it was drawn: a
+/// stroke that starts slowly and speeds up puts the chart a quarter of
+/// the way along at the middle frame.
+#[test]
+fn a_drawn_path_can_record_its_timing() {
+    use symphony_core::graph::NodeKind;
+    let mut h = rig();
+    let id = {
+        let s = &mut h.state_mut().s;
+        let mut nodes = crate::views::node::NodeViewState::default();
+        crate::views::node::add_from_search(s, &mut nodes, crate::views::node::smart_chart());
+        let id = s.selected_node.unwrap();
+        s.frame = 1;
+        crate::views::chart_edit::place(s, id, [0.0, 0.0]);
+        s.frame = 11;
+        crate::views::chart_edit::place(s, id, [200.0, 0.0]);
+        s.end_gesture();
+        id
+    };
+    h.state_mut().canvas.chart_edit.draw_path = true;
+    h.state_mut().canvas.chart_edit.record_timing = true;
+    h.run_steps(2);
+    let canvas = &h.state().canvas;
+    // Each step is the same time: distance grows as time squared.
+    let steps = 40;
+    let points: Vec<egui::Pos2> = (0..=steps)
+        .map(|i| {
+            let t = i as f32 / steps as f32;
+            canvas.to_screen(t * t * 200.0, 0.0)
+        })
+        .collect();
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(points[0]),
+        button(points[0], true),
+    ]);
+    h.step();
+    for &p in &points[1..] {
+        h.input_mut().events.push(egui::Event::PointerMoved(p));
+        h.step();
+    }
+    h.input_mut().events.push(button(points[steps], false));
+    h.run_steps(2);
+    let c = match &h.state().s.doc.graph.node(id).unwrap().kind {
+        NodeKind::Chart(c) => (**c).clone(),
+        _ => unreachable!(),
+    };
+    assert!(!c.points[0].timing.spacing.is_empty(), "timing recorded");
+    let mid = symphony_core::chart::ChartCurve::new(&c)
+        .position(6.0)
+        .unwrap();
+    assert!(
+        (mid[0] - 50.0).abs() < 15.0,
+        "a quarter along at the middle: {mid:?}"
+    );
+}
+
 /// A quick drag takes the Mesh Warp point under the press, even when the
 /// pointer is nearer a neighbour by the time the drag starts.
 #[test]

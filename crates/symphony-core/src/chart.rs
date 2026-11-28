@@ -285,7 +285,7 @@ impl Chart {
             .flatten()
             .map(|line| split_polyline(line, u));
         if let Some((a_half, _)) = &drawn_halves {
-            self.points[left].drawn = normalise(a_half).unwrap_or_default();
+            self.points[left].drawn = normalise(&chain(&fit_beziers(a_half))).unwrap_or_default();
         }
         self.points.insert(
             right,
@@ -310,7 +310,7 @@ impl Chart {
         );
         if let Some((_, b_half)) = drawn_halves {
             if let Some(p) = self.points.get_mut(right) {
-                p.drawn = normalise(&b_half).unwrap_or_default();
+                p.drawn = normalise(&chain(&fit_beziers(&b_half))).unwrap_or_default();
             }
         }
         Some(id)
@@ -414,18 +414,38 @@ impl Chart {
     /// the two points. False when there's no next point or the stroke is
     /// too short to use.
     pub fn set_drawn(&mut self, id: PointId, stroke: &[[f32; 2]]) -> bool {
+        self.set_drawn_timed(id, stroke, None)
+    }
+
+    /// `set_drawn`, and with `times` (seconds, one per stroke point) the
+    /// speed it was drawn at becomes the segment's timing: on each frame
+    /// between the two points, the chart is where the pen was at that
+    /// moment of the stroke.
+    pub fn set_drawn_timed(
+        &mut self,
+        id: PointId,
+        stroke: &[[f32; 2]],
+        times: Option<&[f64]>,
+    ) -> bool {
         let Some(i) = self.points.iter().position(|p| p.id == id) else {
             return false;
         };
-        if i + 1 >= self.points.len() {
-            return false;
-        }
-        let Some(shape) = normalise(&smooth_stroke(stroke)) else {
+        let Some(next) = self.points.get(i + 1).map(|p| p.frame) else {
             return false;
         };
+        let Some(shape) = normalise(&chain(&fit_beziers(&smooth_stroke(stroke)))) else {
+            return false;
+        };
+        let frames = next.saturating_sub(self.points[i].frame);
         let p = &mut self.points[i];
         p.drawn = shape;
         p.path = PathKind::Drawn;
+        if let Some(times) = times {
+            p.timing = Timing {
+                spacing: stroke_spacing(stroke, times, frames),
+                ..Timing::default()
+            };
+        }
         true
     }
 
@@ -768,7 +788,45 @@ impl ChartCurve {
         let mut pts: Vec<&ChartPoint> = chart.points.iter().collect();
         pts.sort_by_key(|p| p.frame);
         pts.dedup_by_key(|p| p.frame);
-        let handles = auto_handles(&pts);
+        let mut handles = auto_handles(&pts);
+        // Drawn segments, in chart coordinates (Bézier controls, or an old
+        // evenly spaced line).
+        let drawn: Vec<Option<Vec<[f32; 2]>>> = pts
+            .windows(2)
+            .map(|w| {
+                (w[0].path == PathKind::Drawn)
+                    .then(|| denormalise(&w[0].drawn, w[0].pos, w[1].pos))
+                    .flatten()
+            })
+            .collect();
+        // A curve meeting a drawn segment leaves in the drawn direction, so
+        // the joint is smooth.
+        for i in 0..pts.len() {
+            if pts[i].tangent != Tangent::Auto {
+                continue;
+            }
+            let p = pts[i].pos;
+            let span = |q: [f32; 2]| (q[0] - p[0]).hypot(q[1] - p[1]) / 3.0;
+            let incoming = i
+                .checked_sub(1)
+                .and_then(|j| drawn[j].as_ref())
+                .and_then(|c| end_direction(c));
+            let outgoing = drawn
+                .get(i)
+                .and_then(|c| c.as_ref())
+                .and_then(|c| start_direction(c));
+            if let (Some(dir), true) = (
+                incoming,
+                i + 1 < pts.len() && pts[i].path == PathKind::Curve,
+            ) {
+                let len = span(pts[i + 1].pos);
+                handles[i].1 = [dir[0] * len, dir[1] * len];
+            }
+            if let (Some(dir), true) = (outgoing, i > 0 && pts[i - 1].path == PathKind::Curve) {
+                let len = span(pts[i - 1].pos);
+                handles[i].0 = [-dir[0] * len, -dir[1] * len];
+            }
+        }
         let segments = pts
             .windows(2)
             .enumerate()
@@ -791,9 +849,7 @@ impl ChartCurve {
                         b.pos,
                     ]
                 };
-                let drawn = (a.path == PathKind::Drawn)
-                    .then(|| denormalise(&a.drawn, a.pos, b.pos))
-                    .flatten();
+                let drawn = drawn[i].as_deref().map(tessellate);
                 let mut segment = Segment {
                     from: a.frame,
                     to: b.frame,
@@ -1016,7 +1072,7 @@ fn resample(line: &[[f32; 2]], n: usize) -> Vec<[f32; 2]> {
 /// evenly spaced again so speed along it is even.
 pub fn smooth_stroke(stroke: &[[f32; 2]]) -> Vec<[f32; 2]> {
     let mut line = resample(stroke, DRAWN_POINTS + 16);
-    for _ in 0..4 {
+    for _ in 0..2 {
         let copy = line.clone();
         for i in 1..line.len().saturating_sub(1) {
             for k in 0..2 {
@@ -1025,6 +1081,294 @@ pub fn smooth_stroke(stroke: &[[f32; 2]]) -> Vec<[f32; 2]> {
         }
     }
     resample(&line, DRAWN_POINTS)
+}
+
+/// The fewest cubic Béziers that stay close to `points` (a smoothed,
+/// evenly spaced stroke): Schneider's curve fitting ("An Algorithm for
+/// Automatically Fitting Digitized Curves", Graphics Gems, 1990). One
+/// cubic is fitted by least squares with the end directions fixed; if
+/// it strays too far, its parameters are refined a few times (Newton),
+/// and failing that the stroke is split at its worst point and each half
+/// fitted, sharing that point's direction so the join is smooth.
+fn fit_beziers(points: &[[f32; 2]]) -> Vec<[[f32; 2]; 4]> {
+    let n = points.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let (a, b) = (points[0], points[n - 1]);
+    let chord = (b[0] - a[0]).hypot(b[1] - a[1]);
+    let length: f32 = points
+        .windows(2)
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .sum();
+    // Within 1.5% of the stroke's size (squared, as the fit measures).
+    let tolerance = (0.015 * chord.max(length * 0.5)).powi(2).max(1e-8);
+    let ahead = points[(n - 1).min(2)];
+    let behind = points[n.saturating_sub(3)];
+    let mut out = Vec::new();
+    fit_cubic(
+        points,
+        unit(sub2(ahead, a)),
+        unit(sub2(behind, b)),
+        tolerance,
+        0,
+        &mut out,
+    );
+    out
+}
+
+fn sub2(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+fn dot2(a: [f32; 2], b: [f32; 2]) -> f32 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+fn unit(v: [f32; 2]) -> [f32; 2] {
+    let l = v[0].hypot(v[1]);
+    if l > 1e-9 {
+        [v[0] / l, v[1] / l]
+    } else {
+        [1.0, 0.0]
+    }
+}
+
+fn fit_cubic(
+    pts: &[[f32; 2]],
+    t1: [f32; 2],
+    t2: [f32; 2],
+    tolerance: f32,
+    depth: usize,
+    out: &mut Vec<[[f32; 2]; 4]>,
+) {
+    let n = pts.len();
+    let (p0, p3) = (pts[0], pts[n - 1]);
+    let simple = |out: &mut Vec<[[f32; 2]; 4]>| {
+        let d = (p3[0] - p0[0]).hypot(p3[1] - p0[1]) / 3.0;
+        out.push([
+            p0,
+            [p0[0] + t1[0] * d, p0[1] + t1[1] * d],
+            [p3[0] + t2[0] * d, p3[1] + t2[1] * d],
+            p3,
+        ]);
+    };
+    if n <= 2 {
+        simple(out);
+        return;
+    }
+    // Chord-length parameters.
+    let mut u = vec![0.0f32; n];
+    for i in 1..n {
+        u[i] = u[i - 1] + (pts[i][0] - pts[i - 1][0]).hypot(pts[i][1] - pts[i - 1][1]);
+    }
+    let total = u[n - 1].max(1e-9);
+    u.iter_mut().for_each(|v| *v /= total);
+    let mut bez = least_squares(pts, &u, t1, t2);
+    let (mut worst, mut split) = max_error(pts, &bez, &u);
+    if worst < tolerance {
+        out.push(bez);
+        return;
+    }
+    if worst < tolerance * 4.0 {
+        for _ in 0..4 {
+            for (i, v) in u.iter_mut().enumerate() {
+                *v = newton(&bez, pts[i], *v);
+            }
+            bez = least_squares(pts, &u, t1, t2);
+            (worst, split) = max_error(pts, &bez, &u);
+            if worst < tolerance {
+                out.push(bez);
+                return;
+            }
+        }
+    }
+    if depth > 12 || n < 4 {
+        out.push(bez);
+        return;
+    }
+    let split = split.clamp(1, n - 2);
+    let centre = unit(sub2(pts[split - 1], pts[split + 1]));
+    fit_cubic(&pts[..=split], t1, centre, tolerance, depth + 1, out);
+    fit_cubic(
+        &pts[split..],
+        [-centre[0], -centre[1]],
+        t2,
+        tolerance,
+        depth + 1,
+        out,
+    );
+}
+
+/// The cubic from the first to the last point, leaving along `t1` and
+/// arriving along `t2`, with handle lengths that fit `pts` best.
+fn least_squares(pts: &[[f32; 2]], u: &[f32], t1: [f32; 2], t2: [f32; 2]) -> [[f32; 2]; 4] {
+    let (p0, p3) = (pts[0], pts[pts.len() - 1]);
+    let (mut c00, mut c01, mut c11, mut x0, mut x1) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    for (p, &t) in pts.iter().zip(u) {
+        let v = 1.0 - t;
+        let (b0, b1, b2, b3) = (v * v * v, 3.0 * v * v * t, 3.0 * v * t * t, t * t * t);
+        let a0 = [t1[0] * b1, t1[1] * b1];
+        let a1 = [t2[0] * b2, t2[1] * b2];
+        c00 += dot2(a0, a0);
+        c01 += dot2(a0, a1);
+        c11 += dot2(a1, a1);
+        let base = [
+            p0[0] * (b0 + b1) + p3[0] * (b2 + b3),
+            p0[1] * (b0 + b1) + p3[1] * (b2 + b3),
+        ];
+        let rest = sub2(*p, base);
+        x0 += dot2(a0, rest);
+        x1 += dot2(a1, rest);
+    }
+    let det = c00 * c11 - c01 * c01;
+    let (mut left, mut right) = if det.abs() > 1e-12 {
+        ((x0 * c11 - x1 * c01) / det, (c00 * x1 - c01 * x0) / det)
+    } else {
+        (0.0, 0.0)
+    };
+    let span = (p3[0] - p0[0]).hypot(p3[1] - p0[1]);
+    if left < 1e-6 * span || right < 1e-6 * span {
+        left = span / 3.0;
+        right = span / 3.0;
+    }
+    [
+        p0,
+        [p0[0] + t1[0] * left, p0[1] + t1[1] * left],
+        [p3[0] + t2[0] * right, p3[1] + t2[1] * right],
+        p3,
+    ]
+}
+
+/// The worst (squared) distance from `pts` to the fitted cubic, and where.
+fn max_error(pts: &[[f32; 2]], bez: &[[f32; 2]; 4], u: &[f32]) -> (f32, usize) {
+    let mut worst = (0.0f32, pts.len() / 2);
+    for i in 1..pts.len() - 1 {
+        let q = bezier(bez, u[i]);
+        let d = sub2(q, pts[i]);
+        let e = dot2(d, d);
+        if e >= worst.0 {
+            worst = (e, i);
+        }
+    }
+    worst
+}
+
+/// One Newton step towards the parameter of `bez` nearest `p`.
+fn newton(bez: &[[f32; 2]; 4], p: [f32; 2], u: f32) -> f32 {
+    let q = bezier(bez, u);
+    let d1: Vec<[f32; 2]> = (0..3)
+        .map(|i| {
+            [
+                3.0 * (bez[i + 1][0] - bez[i][0]),
+                3.0 * (bez[i + 1][1] - bez[i][1]),
+            ]
+        })
+        .collect();
+    let d2: Vec<[f32; 2]> = (0..2)
+        .map(|i| {
+            [
+                2.0 * (d1[i + 1][0] - d1[i][0]),
+                2.0 * (d1[i + 1][1] - d1[i][1]),
+            ]
+        })
+        .collect();
+    let v = 1.0 - u;
+    let q1 = [
+        v * v * d1[0][0] + 2.0 * v * u * d1[1][0] + u * u * d1[2][0],
+        v * v * d1[0][1] + 2.0 * v * u * d1[1][1] + u * u * d1[2][1],
+    ];
+    let q2 = [v * d2[0][0] + u * d2[1][0], v * d2[0][1] + u * d2[1][1]];
+    let diff = sub2(q, p);
+    let den = dot2(q1, q1) + dot2(diff, q2);
+    if den.abs() < 1e-12 {
+        u
+    } else {
+        (u - dot2(diff, q1) / den).clamp(0.0, 1.0)
+    }
+}
+
+/// Béziers as one list of controls: the first point, then three per curve.
+fn chain(curves: &[[[f32; 2]; 4]]) -> Vec<[f32; 2]> {
+    let mut out = Vec::with_capacity(curves.len() * 3 + 1);
+    for (i, c) in curves.iter().enumerate() {
+        if i == 0 {
+            out.push(c[0]);
+        }
+        out.extend_from_slice(&c[1..]);
+    }
+    out
+}
+
+/// A drawn segment's controls (or an old evenly spaced line) as an evenly
+/// spaced line to evaluate.
+fn tessellate(controls: &[[f32; 2]]) -> Vec<[f32; 2]> {
+    if controls.len() < 4 || controls.len() % 3 != 1 {
+        return controls.to_vec();
+    }
+    let mut line = vec![controls[0]];
+    for c in controls.windows(4).step_by(3) {
+        let c = [c[0], c[1], c[2], c[3]];
+        line.extend((1..=24).map(|k| bezier(&c, k as f32 / 24.0)));
+    }
+    resample(&line, 96)
+}
+
+/// The direction a drawn segment leaves its first point / arrives at its
+/// last, from its controls.
+fn start_direction(controls: &[[f32; 2]]) -> Option<[f32; 2]> {
+    let a = *controls.first()?;
+    let b = controls
+        .iter()
+        .skip(1)
+        .find(|q| (q[0] - a[0]).hypot(q[1] - a[1]) > 1e-4)?;
+    Some(unit(sub2(*b, a)))
+}
+
+fn end_direction(controls: &[[f32; 2]]) -> Option<[f32; 2]> {
+    let b = *controls.last()?;
+    let a = controls
+        .iter()
+        .rev()
+        .skip(1)
+        .find(|q| (q[0] - b[0]).hypot(q[1] - b[1]) > 1e-4)?;
+    Some(unit(sub2(b, *a)))
+}
+
+/// Spacing recorded from how a stroke was drawn: for each frame strictly
+/// between the segment's two points (`frames` apart), how far along the
+/// stroke the pen had got at that share of the stroke's time.
+fn stroke_spacing(stroke: &[[f32; 2]], times: &[f64], frames: u32) -> Vec<[f32; 2]> {
+    let n = stroke.len().min(times.len());
+    if n < 2 || frames < 2 {
+        return Vec::new();
+    }
+    let mut along = vec![0.0f32; n];
+    for i in 1..n {
+        along[i] =
+            along[i - 1] + (stroke[i][0] - stroke[i - 1][0]).hypot(stroke[i][1] - stroke[i - 1][1]);
+    }
+    let (length, start, duration) = (along[n - 1], times[0], times[n - 1] - times[0]);
+    if length <= 1e-6 || duration <= 1e-6 {
+        return Vec::new();
+    }
+    let mut last = 0.0f32;
+    (1..frames)
+        .map(|f| {
+            let t = f as f32 / frames as f32;
+            let want = start + duration * f64::from(t);
+            let i = times[..n].partition_point(|&x| x < want).clamp(1, n - 1);
+            let (ta, tb) = (times[i - 1], times[i]);
+            let k = if tb > ta {
+                ((want - ta) / (tb - ta)) as f32
+            } else {
+                0.0
+            };
+            let d = ((along[i - 1] + (along[i] - along[i - 1]) * k) / length).clamp(last, 1.0);
+            last = d;
+            [t, d]
+        })
+        .collect()
 }
 
 /// `line` relative to the line from its first point (0, 0) to its last
@@ -1569,6 +1913,102 @@ mod tests {
             );
         }
         assert_eq!(c.points[1].path, PathKind::Drawn);
+    }
+
+    /// A drawn stroke is stored as the fewest Béziers that stay close to
+    /// it: one smooth arc takes one or two, an S a few, each within 2%
+    /// of the stroke's size of what was drawn.
+    #[test]
+    fn drawn_strokes_fit_few_close_beziers() {
+        let pi = std::f32::consts::PI;
+        let fit = |stroke: Vec<[f32; 2]>, most: usize| {
+            let mut c = Chart::default();
+            let a = c.set_point(1, stroke[0], Role::Key);
+            c.set_point(21, *stroke.last().unwrap(), Role::Key);
+            assert!(c.set_drawn(a, &stroke));
+            let curves = (c.points[0].drawn.len() - 1) / 3;
+            assert!(curves >= 1 && curves <= most, "{curves} Béziers");
+            assert_eq!(c.points[0].drawn.len() % 3, 1);
+            let path = ChartCurve::new(&c).path(64);
+            let worst = stroke
+                .iter()
+                .map(|p| {
+                    path.iter()
+                        .map(|q| (p[0] - q[0]).hypot(p[1] - q[1]))
+                        .fold(f32::INFINITY, f32::min)
+                })
+                .fold(0.0f32, f32::max);
+            assert!(worst < 4.0, "strays {worst} from the stroke");
+        };
+        // A half circle, radius 100.
+        fit(
+            (0..=80)
+                .map(|i| {
+                    let t = i as f32 / 80.0 * pi;
+                    [100.0 - t.cos() * 100.0, -t.sin() * 100.0]
+                })
+                .collect(),
+            2,
+        );
+        // An S.
+        fit(
+            (0..=80)
+                .map(|i| {
+                    let t = i as f32 / 80.0;
+                    [t * 200.0, (t * 2.0 * pi).sin() * 60.0]
+                })
+                .collect(),
+            4,
+        );
+    }
+
+    /// Where a drawn segment meets a curve, the curve leaves in the drawn
+    /// direction: no corner at the point.
+    #[test]
+    fn a_drawn_segment_joins_its_neighbour_smoothly() {
+        let mut c = Chart::default();
+        let a = c.set_point(1, [0.0, 0.0], Role::Key);
+        c.set_point(11, [100.0, 0.0], Role::Key);
+        c.set_point(21, [160.0, 80.0], Role::Key);
+        // Arrives at the middle point heading steeply down-right.
+        let stroke: Vec<[f32; 2]> = (0..=40)
+            .map(|i| {
+                let t = i as f32 / 40.0;
+                [t * 100.0, -(t * std::f32::consts::PI).sin() * 40.0]
+            })
+            .collect();
+        assert!(c.set_drawn(a, &stroke));
+        let curve = ChartCurve::new(&c);
+        let dir = |f: f32| curve.sample(f).unwrap().direction;
+        let (before, after) = (dir(10.98), dir(11.02));
+        let angle = (before[0] * after[1] - before[1] * after[0])
+            .atan2(before[0] * after[0] + before[1] * after[1])
+            .to_degrees();
+        assert!(angle.abs() < 4.0, "a {angle}° corner");
+    }
+
+    /// Recording timing from the stroke: drawn slowly then faster, the
+    /// chart is a quarter of the way along at the middle frame.
+    #[test]
+    fn a_stroke_records_its_timing() {
+        let mut c = Chart::default();
+        let a = c.set_point(1, [0.0, 0.0], Role::Key);
+        c.set_point(11, [100.0, 0.0], Role::Key);
+        // The pen covers distance t² over time t: slow out of the key.
+        let n = 60;
+        let stroke: Vec<[f32; 2]> = (0..=n)
+            .map(|i| {
+                let t = i as f32 / n as f32;
+                [t * t * 100.0, 0.0]
+            })
+            .collect();
+        let times: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        assert!(c.set_drawn_timed(a, &stroke, Some(&times)));
+        assert_eq!(c.points[0].timing.spacing.len(), 9);
+        let mid = ChartCurve::new(&c).position(6.0).unwrap();
+        assert!((mid[0] - 25.0).abs() < 2.0, "{mid:?}");
+        let late = ChartCurve::new(&c).position(9.0).unwrap();
+        assert!((late[0] - 64.0).abs() < 2.0, "{late:?}");
     }
 
     /// Freezing a point's handles keeps the curve exactly as it was.

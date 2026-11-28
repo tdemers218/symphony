@@ -196,8 +196,10 @@ pub struct ChartEdit {
     /// Drawing a path (the bar's pencil, or Shift+drag): a drag draws the
     /// segment between the two points it starts and ends on.
     pub(crate) draw_path: bool,
-    /// The stroke being drawn, on screen.
-    sketch: Option<Vec<Pos2>>,
+    /// A drawn path also sets the timing: the speed it was drawn at.
+    pub(crate) record_timing: bool,
+    /// The stroke being drawn, on screen, with when each point was drawn.
+    sketch: Option<Vec<(Pos2, f64)>>,
     /// Scene and edit count the charts were last checked at.
     stamp: Option<(String, u64)>,
     built: HashMap<NodeId, Built>,
@@ -529,6 +531,7 @@ pub fn ui(
         &mut state.card_pending,
         &mut state.show_pose,
         &mut state.draw_path,
+        &mut state.record_timing,
     ));
     if chart.locked {
         return true;
@@ -547,7 +550,8 @@ pub fn ui(
             && (state.draw_path
                 || (shift && matches!(target, None | Some(Grab::Point(_)) | Some(Grab::Tick(_)))));
         if sketching {
-            state.sketch = origin.map(|p| vec![p]);
+            let now = ui.input(|i| i.time);
+            state.sketch = origin.map(|p| vec![(p, now)]);
             state.dragging = None;
         } else {
             state.dragging = target.map(|g| (id, g));
@@ -555,18 +559,19 @@ pub fn ui(
     }
     if let Some(stroke) = &mut state.sketch {
         if let Some(p) = response.interact_pointer_pos() {
-            if stroke.last().is_none_or(|q| q.distance(p) > 1.5) {
-                stroke.push(p);
+            if stroke.last().is_none_or(|(q, _)| q.distance(p) > 1.5) {
+                stroke.push((p, ui.input(|i| i.time)));
             }
         }
         // The stroke as it's drawn: the chart's colour on a soft shadow.
-        let drop: Vec<Pos2> = stroke.iter().map(|p| *p + Vec2::new(0.0, 1.5)).collect();
+        let line: Vec<Pos2> = stroke.iter().map(|(p, _)| *p).collect();
+        let drop: Vec<Pos2> = line.iter().map(|p| *p + Vec2::new(0.0, 1.5)).collect();
         painter.add(egui::Shape::line(
             drop,
             EStroke::new(3.5, Color32::from_black_alpha(60)),
         ));
         painter.add(egui::Shape::line(
-            stroke.clone(),
+            line,
             EStroke::new(2.0, colour(&chart, id)),
         ));
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -575,7 +580,8 @@ pub fn ui(
             let stroke = state.sketch.take().unwrap_or_default();
             if !cancel {
                 if let Some(back) = back {
-                    finish_sketch(s, id, &chart, &stroke, &screen, back);
+                    let timed = state.record_timing;
+                    finish_sketch(s, id, &chart, &stroke, timed, &screen, back);
                 }
             }
         }
@@ -667,7 +673,8 @@ fn finish_sketch(
     s: &mut Session,
     id: NodeId,
     chart: &Chart,
-    stroke: &[Pos2],
+    stroke: &[(Pos2, f64)],
+    timed: bool,
     screen: &impl Fn([f32; 2]) -> Pos2,
     back: Affine,
 ) {
@@ -682,7 +689,7 @@ fn finish_sketch(
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i)
     };
-    let (Some(&first), Some(&last)) = (stroke.first(), stroke.last()) else {
+    let (Some(&(first, _)), Some(&(last, _))) = (stroke.first(), stroke.last()) else {
         return;
     };
     let ends = nearest(first).zip(nearest(last));
@@ -692,18 +699,28 @@ fn finish_sketch(
     };
     let mut line: Vec<[f32; 2]> = stroke
         .iter()
-        .map(|p| {
+        .map(|(p, _)| {
             let (x, y) = back.apply(p.x, p.y);
             [x, y]
         })
         .collect();
+    // Drawn from the later point back: the same path, and time running
+    // the other way.
+    let end = stroke.last().map_or(0.0, |(_, t)| *t);
+    let mut times: Vec<f64> = stroke.iter().map(|(_, t)| *t).collect();
     if i > j {
         line.reverse();
+        times = times.iter().rev().map(|t| end - t).collect();
     }
     let pid = chart.points[i.min(j)].id;
     let mut ok = false;
-    edit(s, id, "Draw chart path", None, |c| {
-        ok = c.set_drawn(pid, &line)
+    let name = if timed {
+        "Draw chart path and timing"
+    } else {
+        "Draw chart path"
+    };
+    edit(s, id, name, None, |c| {
+        ok = c.set_drawn_timed(pid, &line, timed.then_some(times.as_slice()))
     });
     if !ok {
         s.note("That stroke is too short to use as a path.");
@@ -1082,6 +1099,7 @@ fn bar(
     pending: &mut bool,
     show_pose: &mut bool,
     draw_path: &mut bool,
+    record_timing: &mut bool,
 ) -> Vec2 {
     let here = chart.point_on(s.frame).map(|p| p.id);
     let (pos, pivot) = place.unwrap_or((
@@ -1160,6 +1178,17 @@ fn bar(
                         .clicked()
                     {
                         *draw_path = !*draw_path;
+                    }
+                    // With the pencil: also take the timing from the stroke.
+                    if *draw_path
+                        && ui
+                            .add(egui::Button::new("Timing").selected(*record_timing))
+                            .on_hover_text(
+                                "Record timing too: the chart moves as fast as you draw.",
+                            )
+                            .clicked()
+                    {
+                        *record_timing = !*record_timing;
                     }
                     let mut done = false;
                     ui.menu_button("More", |ui| {

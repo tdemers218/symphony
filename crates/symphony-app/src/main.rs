@@ -1008,6 +1008,10 @@ impl SymphonyApp {
                 // and scale needle showing.
                 c.chart_edit.show_pose =
                     std::env::var("SYMPHONY_SHOT_CHART").is_ok_and(|v| v == "pose");
+                // =drawn: the pencil on, with timing recording.
+                let drawn = std::env::var("SYMPHONY_SHOT_CHART").is_ok_and(|v| v == "drawn");
+                c.chart_edit.draw_path = drawn;
+                c.chart_edit.record_timing = drawn;
                 c
             },
             drawing: Default::default(),

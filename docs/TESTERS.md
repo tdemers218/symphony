@@ -163,8 +163,10 @@ A Smart Chart is an animator's timing chart that moves artwork. Search
   chart is on that frame. Node Properties has the same settings.
 - **Draw the path.** Turn on the pencil in the bar (or hold Shift) and
   drag from one point to the next: your stroke, smoothed, becomes the path
-  between them. Moving either point stretches the drawn path with it.
-  Click **Drawn** on the bar to go back to the automatic curve.
+  between them, as a few clean curves. Moving either point stretches
+  the drawn path with it. Turn on **Timing** next to the pencil to record
+  timing as well: the chart then moves as fast as you drew. Click
+  **Drawn** on the bar to go back to the automatic curve.
 - **Turn and scale.** Click the rotate button on the bar: drag the round
   knob on the needle to turn (Shift snaps 15°) and the square along it to
   scale. **More** has exact Rotation and Scale: 720° is two full turns.
