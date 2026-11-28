@@ -1820,6 +1820,18 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
                     });
                 });
             }
+            if let Some((chart, _)) = s.doc.graph.followed_chart(draft.id) {
+                ui.add_space(8.0);
+                property_heading(ui, "Motion");
+                let name = s.doc.graph.node(chart).map_or("", |n| n.name.as_str());
+                ui.label(format!("Follows {name}"));
+                ui.horizontal(|ui| {
+                    widgets::checkbox(ui, &mut peg.follow.rotation, "Rotation")
+                        .on_hover_text("Turn with the chart's rotation.");
+                    widgets::checkbox(ui, &mut peg.follow.scale, "Scale")
+                        .on_hover_text("Grow and shrink with the chart's scale.");
+                });
+            }
         }
         NodeKind::Bone(bone) => {
             if bone_drawings(ui, s, draft.id, &mut draft.bone_thumb) {
@@ -3290,6 +3302,13 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
         }
     }
 
+    // Pegs show their Motion port only in scenes that have a chart, so
+    // the usual graph looks as it always has.
+    let has_chart = s
+        .doc
+        .graph
+        .nodes()
+        .any(|(_, n)| matches!(n.kind, NodeKind::Chart(_)));
     let mut cards = BTreeMap::new();
     let mut inputs = BTreeMap::<Input, Pos2>::new();
     let mut outputs = BTreeMap::new();
@@ -3314,9 +3333,11 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
             used.push(free);
             used.sort_unstable();
             used
-        } else if matches!(node.kind, NodeKind::Gradient(_)) {
+        } else if matches!(node.kind, NodeKind::Gradient(_) | NodeKind::Chart(_)) {
             vec![]
-        } else if matches!(node.kind, NodeKind::Effect(Effect::Mask { .. })) {
+        } else if matches!(node.kind, NodeKind::Effect(Effect::Mask { .. }))
+            || (matches!(node.kind, NodeKind::Peg(_)) && has_chart)
+        {
             vec![0, 1]
         } else {
             vec![0]
@@ -4189,6 +4210,8 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
 
     for (&input, &point) in &inputs {
         let node = s.doc.graph.node(input.0);
+        let peg = node.is_some_and(|n| matches!(n.kind, NodeKind::Peg(_)));
+        let motion = peg && input.1 == symphony_core::graph::MOTION_PORT;
         if zoom >= 0.75
             && node.is_some_and(|node| matches!(node.kind, NodeKind::Effect(Effect::Mask { .. })))
         {
@@ -4200,7 +4223,21 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
                 theme::TEXT_SECONDARY,
             );
         }
-        let transform = node.is_some_and(|n| {
+        // Named while a chart's cable is looking for it.
+        let chart_cable = matches!(state.drag, Some(Drag::Cable { source, .. })
+            if matches!(s.doc.graph.node(source).map(|n| &n.kind), Some(NodeKind::Chart(_))));
+        if motion && zoom >= 0.75 && chart_cable {
+            painter.text(
+                point - Vec2::Y * 8.0,
+                Align2::CENTER_BOTTOM,
+                "Motion",
+                theme::dense(),
+                theme::TEXT_SECONDARY,
+            );
+        }
+        let shape = if motion {
+            Socket::Motion
+        } else if node.is_some_and(|n| {
             matches!(
                 n.kind,
                 NodeKind::Peg(_)
@@ -4208,7 +4245,11 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
                     | NodeKind::Skeleton(_)
                     | NodeKind::Bone(_)
             )
-        });
+        }) {
+            Socket::Transform
+        } else {
+            Socket::Image
+        };
         let compatible = match state.drag {
             Some(Drag::Cable { source, .. }) => {
                 s.doc.graph.can_connect_to(source, input.0, input.1)
@@ -4233,22 +4274,21 @@ fn canvas(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState, add: Op
             .graph
             .input(input.0, input.1)
             .and_then(|from| peg_colour(&s.doc.graph, from));
-        socket(&painter, point, transform, filled, highlighted, ink, zoom);
+        socket(&painter, point, shape, filled, highlighted, ink, zoom);
     }
     for (id, point) in outputs {
-        let transform = s.doc.graph.node(id).is_some_and(|n| {
-            matches!(
-                n.kind,
-                NodeKind::Peg(_) | NodeKind::Skeleton(_) | NodeKind::Bone(_)
-            )
-        });
+        let shape = match s.doc.graph.node(id).map(|n| &n.kind) {
+            Some(NodeKind::Chart(_)) => Socket::Motion,
+            Some(NodeKind::Peg(_) | NodeKind::Skeleton(_) | NodeKind::Bone(_)) => Socket::Transform,
+            _ => Socket::Image,
+        };
         let highlighted = hover.is_some_and(|p| p.distance(point) <= hit_radius)
             || state.selection.contains(&id)
             || selected_outputs.contains(&id);
         socket(
             &painter,
             point,
-            transform,
+            shape,
             true,
             highlighted,
             peg_colour(&s.doc.graph, id),
@@ -4355,10 +4395,19 @@ fn hover_thumbnail(
         });
 }
 
+/// A port's shape says what it carries: images are round, transforms
+/// square, a chart's motion a diamond.
+#[derive(Clone, Copy, PartialEq)]
+enum Socket {
+    Image,
+    Transform,
+    Motion,
+}
+
 fn socket(
     painter: &egui::Painter,
     point: Pos2,
-    transform: bool,
+    shape: Socket,
     filled: bool,
     hover: bool,
     ink: Option<egui::Color32>,
@@ -4372,16 +4421,32 @@ fn socket(
     };
     let fill = if filled { color } else { theme::BG_INPUT };
     let stroke = Stroke::new(1.0, color);
-    if transform {
-        painter.rect(
-            Rect::from_center_size(point, Vec2::splat(radius * 2.0)),
-            1.0,
-            fill,
-            stroke,
-            StrokeKind::Inside,
-        );
-    } else {
-        painter.circle(point, radius, fill, stroke);
+    match shape {
+        Socket::Transform => {
+            painter.rect(
+                Rect::from_center_size(point, Vec2::splat(radius * 2.0)),
+                1.0,
+                fill,
+                stroke,
+                StrokeKind::Inside,
+            );
+        }
+        Socket::Motion => {
+            let r = radius * 1.3;
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    point - Vec2::Y * r,
+                    point + Vec2::X * r,
+                    point + Vec2::Y * r,
+                    point - Vec2::X * r,
+                ],
+                fill,
+                stroke,
+            ));
+        }
+        Socket::Image => {
+            painter.circle(point, radius, fill, stroke);
+        }
     }
 }
 

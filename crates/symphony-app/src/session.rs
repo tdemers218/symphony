@@ -2585,6 +2585,94 @@ impl Session {
         }
     }
 
+    /// The peg right above a layer's drawing: the one that follows a
+    /// Smart Chart for it.
+    pub fn layer_peg(&self, layer: usize) -> Option<NodeId> {
+        let node = self.doc.layers.get(layer)?.node;
+        let peg = self.doc.graph.input(node, 0)?;
+        matches!(self.doc.graph.node(peg)?.kind, NodeKind::Peg(_)).then_some(peg)
+    }
+
+    /// The chart layer `layer` follows, if any.
+    pub fn layer_chart(&self, layer: usize) -> Option<NodeId> {
+        let peg = self.layer_peg(layer)?;
+        self.doc.graph.followed_chart(peg).map(|(id, _)| id)
+    }
+
+    /// Make `layer` follow `chart`, or nothing (None), as one undo step.
+    /// False when the layer has no peg of its own to carry the motion.
+    pub fn set_layer_chart(&mut self, layer: usize, chart: Option<NodeId>) -> bool {
+        use symphony_core::graph::{Link, MOTION_PORT};
+        let Some(peg) = self.layer_peg(layer) else {
+            return false;
+        };
+        if chart.is_some_and(|c| !self.doc.graph.can_connect_to(c, peg, MOTION_PORT)) {
+            return false;
+        }
+        let before = self.doc.graph.links().to_vec();
+        let mut after: Vec<Link> = before
+            .iter()
+            .copied()
+            .filter(|l| !(l.to == peg && l.port == MOTION_PORT))
+            .collect();
+        if let Some(from) = chart {
+            after.push(Link {
+                from,
+                to: peg,
+                port: MOTION_PORT,
+            });
+        }
+        if before != after {
+            let was_custom = self.doc.custom_wiring;
+            let name = if chart.is_some() {
+                "Follow chart"
+            } else {
+                "Stop following chart"
+            };
+            self.history.apply(
+                &mut self.doc,
+                name,
+                vec![Edit::RewireNodes {
+                    before,
+                    after,
+                    was_custom,
+                }],
+            );
+        }
+        true
+    }
+
+    /// From search: the selected layer follows the selected chart, or the
+    /// newest one.
+    pub fn follow_chart(&mut self) {
+        let is_chart = |s: &Self, id: NodeId| {
+            matches!(
+                s.doc.graph.node(id).map(|n| &n.kind),
+                Some(NodeKind::Chart(_))
+            )
+        };
+        let chart = self
+            .selected_node
+            .filter(|&id| is_chart(self, id))
+            .or_else(|| {
+                let ids: Vec<NodeId> = self.doc.graph.nodes().map(|(id, _)| id).collect();
+                ids.into_iter().rev().find(|&id| is_chart(self, id))
+            });
+        let Some(chart) = chart else {
+            self.notice = Some("There's no Smart Chart to follow yet.".into());
+            return;
+        };
+        let name = self
+            .doc
+            .column(self.selected)
+            .map_or_else(String::new, |c| c.name.clone());
+        self.notice = Some(if self.set_layer_chart(self.selected, Some(chart)) {
+            format!("{name} follows the chart.")
+        } else {
+            format!("{name} has no peg to follow the chart with.")
+        });
+    }
+
     pub fn insert_inbetweens(&mut self, count: u32) {
         let before = self.length();
         if count == 0 || count > 100_000u32.saturating_sub(before) {
@@ -4385,6 +4473,30 @@ mod tests {
         assert_eq!(frames(&s), vec![1, 11]);
         s.undo();
         assert_eq!(frames(&s), vec![1, 9]);
+    }
+
+    /// Search's "Follow Smart Chart" hooks the selected chart to the
+    /// layer's peg: the layer then moves along it, and one undo unhooks it.
+    #[test]
+    fn a_layer_follows_a_smart_chart_from_search() {
+        let mut s = Session::new_scene();
+        let mut nodes = crate::views::node::NodeViewState::default();
+        crate::views::node::add_from_search(&mut s, &mut nodes, crate::views::node::smart_chart());
+        let id = s.selected_node.unwrap();
+        s.frame = 1;
+        crate::views::chart_edit::place(&mut s, id, [0.0, 0.0]);
+        s.frame = 9;
+        crate::views::chart_edit::place(&mut s, id, [80.0, 0.0]);
+        let node = s.doc.layers[s.selected].node;
+        let at = |s: &Session, frame| s.doc.graph.world_transform(node, frame).unwrap().tx;
+        assert_eq!(at(&s, 9), 0.0);
+        s.follow_chart();
+        assert_eq!(s.layer_chart(s.selected), Some(id));
+        assert_eq!(at(&s, 1), 0.0);
+        assert!((at(&s, 9) - 80.0).abs() < 1e-3);
+        s.undo();
+        assert_eq!(s.layer_chart(s.selected), None);
+        assert_eq!(at(&s, 9), 0.0);
     }
 
     fn line(s: &mut Session, x0: f32, x1: f32) -> Stroke {

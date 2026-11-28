@@ -78,6 +78,11 @@ Timing { hold, ease_out, ease_in, spacing: Vec<[t, s]> }
    - Timeline track, retiming with insert and delete frames, copy and paste points, shift the whole chart in time.
 4. **Node integration.**
    - A typed Motion output. Consumers: Peg first (follow a chart: position, plus optional rotation and scale), then others.
+     *Peg done:* a peg's port 1 (`graph::MOTION_PORT`, a diamond socket, shown once the scene has a chart) takes a chart.
+     The motion is `translate(pos) · rotate · scale · translate(-start)` in the peg's parent space, so artwork stays where it was drawn on the chart's first frame and turns around the chart's current point.
+     Peg properties have Rotation / Scale toggles; the chart card has "<layer> follows this chart"; search has "Follow Smart Chart".
+     Curves are shared through `chart::shared_curve`, keyed by chart content.
+     Open: under a moving parent the chart overlay (drawn in stage space) and the motion (parent space) differ; show it through the parent then.
    - One chart can drive several consumers; contextual connections from search; curves cached per `doc.version`.
 5. **Polish.** Shortcuts, search coverage, large-project timings in `scripts/perf.sh`, user documentation, a manual workflow test (three key poses; head, torso and hand charts).
 

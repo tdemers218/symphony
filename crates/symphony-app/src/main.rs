@@ -892,12 +892,29 @@ impl SymphonyApp {
                     ],
                     true,
                 );
+                // =follow: the layer rides a third chart that starts on it.
+                let follow = std::env::var("SYMPHONY_SHOT_CHART").is_ok_and(|v| v == "follow");
+                let main = if follow {
+                    let id = add(
+                        &mut s,
+                        &[(1, [0.0, 0.0]), (8, [300.0, -200.0]), (15, [560.0, 40.0])],
+                        true,
+                    );
+                    if let Some(id) = id {
+                        s.set_layer_chart(s.selected, Some(id));
+                    }
+                    id
+                } else {
+                    main
+                };
                 if let Some(id) = main {
                     s.select_graph_node(id, false);
                 }
                 // =point: on a point's frame, to review its card and handles.
                 s.frame = if std::env::var("SYMPHONY_SHOT_CHART").is_ok_and(|v| v == "point") {
                     7
+                } else if follow {
+                    11
                 } else {
                     10
                 };
@@ -2902,6 +2919,18 @@ impl SymphonyApp {
             );
             entry.context.clone_from(&node_views);
             out.push(entry);
+            out.push(
+                Entry::new(
+                    "Follow Smart Chart",
+                    Kind::Action,
+                    Command::FollowChart,
+                    "chart.follow",
+                )
+                .words(
+                    "chart smart follow motion path drive attach move along peg layer \
+                     trajectory",
+                ),
+            );
         }
         // Every blend mode is its own search result ("subtract", "glow",
         // "shadow"...), adding a Blend Modes node already set to it.
@@ -3500,6 +3529,7 @@ impl SymphonyApp {
             Command::AddNode(kind) => {
                 views::node::add_from_search(&mut self.s, &mut self.node_view, kind)
             }
+            Command::FollowChart => self.s.follow_chart(),
         }
     }
 

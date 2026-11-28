@@ -684,6 +684,20 @@ fn card(
                     s.end_gesture();
                     *pending = false;
                 }
+                // What this chart drives: the layer it's being drawn for.
+                if s.layer_peg(s.selected).is_some() {
+                    let name = s
+                        .doc
+                        .column(s.selected)
+                        .map_or_else(String::new, |c| c.name.clone());
+                    let mut follows = s.layer_chart(s.selected) == Some(id);
+                    if widgets::checkbox(ui, &mut follows, &format!("{name} follows this chart"))
+                        .on_hover_text("The layer's peg moves along the chart.")
+                        .changed()
+                    {
+                        s.set_layer_chart(s.selected, follows.then_some(id));
+                    }
+                }
                 ui.horizontal(|ui| {
                     if widgets::primary_button(ui, "Done", true).clicked() {
                         // Back to the layer: the chart stays, quietly.

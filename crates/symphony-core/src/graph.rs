@@ -36,7 +36,39 @@ pub struct PegParams {
     pub scale_x: Option<Value>,
     pub scale_y: Option<Value>,
     pub pivot: (f32, f32),
+    /// What it takes from a Smart Chart on its Motion port, if one is
+    /// connected there.
+    #[serde(default, skip_serializing_if = "Follow::is_default")]
+    pub follow: Follow,
 }
+
+/// Which parts of a chart's motion a following peg takes. Position always.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Follow {
+    #[serde(default = "crate::chart::yes")]
+    pub rotation: bool,
+    #[serde(default = "crate::chart::yes")]
+    pub scale: bool,
+}
+
+impl Default for Follow {
+    fn default() -> Self {
+        Follow {
+            rotation: true,
+            scale: true,
+        }
+    }
+}
+
+impl Follow {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The input port where a peg takes a Smart Chart's motion (port 0 is its
+/// parent).
+pub const MOTION_PORT: usize = 1;
 
 impl PegParams {
     pub fn transform_at(&self, frame: u32) -> Affine {
@@ -451,6 +483,14 @@ impl StagePose {
         }
     }
 
+    fn flat(t: Affine) -> Self {
+        Self::from_rows([
+            [t.a, t.c, 0.0, t.tx],
+            [t.b, t.d, 0.0, t.ty],
+            [0.0, 0.0, 1.0, 0.0],
+        ])
+    }
+
     fn compose(self, rhs: Self) -> Self {
         Self::from_rows(self.rows.map(|row| {
             std::array::from_fn(|column| {
@@ -632,7 +672,14 @@ impl Graph {
         if self.is_drawing_matte(from) && !(mask && port == 1) {
             return false;
         }
-        if !matches!(target.kind, NodeKind::Composite) && port > usize::from(mask) {
+        // A peg's Motion port takes a chart, and a chart goes nowhere else.
+        let peg = matches!(target.kind, NodeKind::Peg(_));
+        let chart = matches!(self.node(from).map(|n| &n.kind), Some(NodeKind::Chart(_)));
+        if chart != (peg && port == MOTION_PORT) {
+            return false;
+        }
+        let last = if peg { MOTION_PORT } else { usize::from(mask) };
+        if !matches!(target.kind, NodeKind::Composite) && port > last {
             return false;
         }
         self.can_connect(from, to)
@@ -667,8 +714,9 @@ impl Graph {
                 target.kind,
                 NodeKind::Composite | NodeKind::Effect(_) | NodeKind::Display | NodeKind::Write
             ),
-            // Charts drive nothing yet (Milestone 4 adds a Motion port).
-            NodeKind::Display | NodeKind::Write | NodeKind::Chart(_) => false,
+            // Only on a peg's Motion port (checked by `can_connect_to`).
+            NodeKind::Chart(_) => matches!(target.kind, NodeKind::Peg(_)),
+            NodeKind::Display | NodeKind::Write => false,
         };
         if !valid {
             return false;
@@ -911,7 +959,7 @@ impl Graph {
             }
             match &node.kind {
                 NodeKind::Peg(p) | NodeKind::Skeleton(p) => {
-                    outer = outer.compose(p.transform_at(frame))
+                    outer = outer.compose(self.peg_transform(n, p, frame))
                 }
                 NodeKind::Bone(bone) if bound_bone == Some(n) => {
                     let pose = self.bone_pose_inner(n, frame, depth)?;
@@ -960,7 +1008,7 @@ impl Graph {
                 NodeKind::Bone(_) => return Some((id, inner)),
                 NodeKind::Peg(peg) => {
                     if self.enabled_at(id, frame) {
-                        inner = peg.transform_at(frame).compose(inner);
+                        inner = self.peg_transform(id, peg, frame).compose(inner);
                     }
                 }
                 NodeKind::MeshWarp(_) => {}
@@ -1378,6 +1426,46 @@ impl Graph {
         Some(base.compose(Affine::rotate_deg(bone.rest_angle)))
     }
 
+    /// The Smart Chart on a peg's Motion port, if it's there and enabled.
+    pub fn followed_chart(&self, peg: NodeId) -> Option<(NodeId, &crate::chart::Chart)> {
+        let id = self.input(peg, MOTION_PORT)?;
+        match &self.node(id)?.kind {
+            NodeKind::Chart(chart) => Some((id, chart)),
+            _ => None,
+        }
+    }
+
+    /// What a peg's chart adds on `frame`, in the peg's parent space: the
+    /// artwork travels with the chart from where the chart starts, and
+    /// turns and scales around the chart's current position. None when
+    /// the peg follows no chart, or the chart is off.
+    pub fn chart_motion(&self, peg: NodeId, frame: u32) -> Option<Affine> {
+        let NodeKind::Peg(p) = &self.node(peg)?.kind else {
+            return None;
+        };
+        let (id, chart) = self.followed_chart(peg)?;
+        if !self.enabled_at(id, frame) {
+            return None;
+        }
+        let curve = crate::chart::shared_curve(chart);
+        let start = curve.position(f32::MIN)?;
+        let m = curve.sample(frame as f32)?;
+        let mut t = Affine::translate(m.position[0], m.position[1]);
+        if p.follow.rotation {
+            t = t.compose(Affine::rotate_deg(m.rotation));
+        }
+        if p.follow.scale {
+            t = t.compose(Affine::scale(m.scale[0], m.scale[1]));
+        }
+        Some(t.compose(Affine::translate(-start[0], -start[1])))
+    }
+
+    /// A peg's own transform on `frame`, with the chart it follows.
+    pub fn peg_transform(&self, id: NodeId, peg: &PegParams, frame: u32) -> Affine {
+        let own = peg.transform_at(frame);
+        self.chart_motion(id, frame).map_or(own, |m| m.compose(own))
+    }
+
     fn eval_transform(&self, id: NodeId, frame: u32, depth: usize) -> Result<StagePose, EvalError> {
         let node = self.get(id, depth)?;
         let parent = match self.input(id, 0) {
@@ -1390,13 +1478,16 @@ impl Graph {
                     .sample_key(id, frame)
                     .map_or(node.enabled, |key| key.enabled) =>
             {
+                let motion = self.chart_motion(id, frame);
                 let local = p.stage_transform(frame);
+                let local = motion.map_or(local, |m| StagePose::flat(m).compose(local));
                 let mut pose = parent.compose(local);
                 if parent.front.is_some() || p.tilt_enabled {
+                    let flat = p.flat_transform_at(frame);
                     let front = parent
                         .front
                         .unwrap_or(parent.transform)
-                        .compose(p.flat_transform_at(frame));
+                        .compose(motion.map_or(flat, |m| m.compose(flat)));
                     pose.front = Some(front);
                     if p.tilt_enabled && p.face_camera {
                         let (x, y) = p.pivot;
@@ -1421,13 +1512,14 @@ mod tests {
     use super::*;
     use crate::xsheet::Column;
 
-    /// A chart is motion only: it can't be wired into the image or
-    /// transform flow (yet), and having one changes no render.
+    /// A chart is motion only: having one changes no render, and its one
+    /// place in the graph is a peg's Motion port.
     #[test]
-    fn a_chart_renders_nothing_and_connects_to_nothing() {
+    fn a_chart_renders_nothing_and_connects_only_to_a_peg_motion_port() {
         let mut graph = Graph::default();
         let drawing = graph.add("Drawing", NodeKind::Drawing { column: Id(1) });
         let display = graph.add("Display", NodeKind::Display);
+        let peg = graph.add("Peg", NodeKind::Peg(PegParams::default()));
         graph.connect(drawing, display, 0);
         let count = |g: &Graph| {
             g.render_commands(display, &Xsheet::default(), 1)
@@ -1436,10 +1528,54 @@ mod tests {
         let before = count(&graph);
         let chart = graph.add("Head", NodeKind::Chart(Box::default()));
         for other in [drawing, display] {
-            assert!(!graph.can_connect(chart, other));
-            assert!(!graph.can_connect(other, chart));
+            assert!(!graph.can_connect_to(chart, other, 0));
+            assert!(!graph.can_connect_to(other, chart, 0));
         }
+        assert!(graph.can_connect_to(chart, peg, MOTION_PORT));
+        assert!(!graph.can_connect_to(chart, peg, 0));
+        let other = graph.add("Other", NodeKind::Peg(PegParams::default()));
+        assert!(!graph.can_connect_to(other, peg, MOTION_PORT));
+        assert!(graph.can_connect_to(other, peg, 0));
         assert_eq!(count(&graph), before);
+    }
+
+    /// A drawing under a peg on a chart: where the chart starts, it's
+    /// where it was drawn; then it travels, turns and scales with the
+    /// chart. Turning the chart off, or the parts off on the peg, stops it.
+    #[test]
+    fn a_peg_follows_its_chart() {
+        use crate::chart::{Chart, Role};
+        let mut graph = Graph::default();
+        let drawing = graph.add("Ball", NodeKind::Drawing { column: Id(1) });
+        let peg = graph.add("Ball-P", NodeKind::Peg(PegParams::default()));
+        graph.connect(peg, drawing, 0);
+        let mut chart = Chart::default();
+        chart.set_point(1, [10.0, 20.0], Role::Key);
+        chart.set_point(11, [110.0, 20.0], Role::Key);
+        chart.set_rotation(1, 0.0);
+        chart.set_rotation(11, 90.0);
+        let id = graph.add("Chart", NodeKind::Chart(Box::new(chart)));
+        graph.connect(id, peg, MOTION_PORT);
+        let at = |g: &Graph, frame: u32, p: (f32, f32)| {
+            let (x, y) = g.world_transform(drawing, frame).unwrap().apply(p.0, p.1);
+            [(x * 100.0).round() / 100.0, (y * 100.0).round() / 100.0]
+        };
+        // The chart starts at (10, 20): artwork there doesn't move.
+        assert_eq!(at(&graph, 1, (10.0, 20.0)), [10.0, 20.0]);
+        assert_eq!(at(&graph, 1, (20.0, 20.0)), [20.0, 20.0]);
+        // At the end it's moved 100 along and turned a quarter.
+        assert_eq!(at(&graph, 11, (10.0, 20.0)), [110.0, 20.0]);
+        assert_eq!(at(&graph, 11, (20.0, 20.0)), [110.0, 30.0]);
+        // Position only.
+        let mut only = graph.clone();
+        if let Some(NodeKind::Peg(p)) = only.node_mut(peg).map(|n| &mut n.kind) {
+            p.follow.rotation = false;
+        }
+        assert_eq!(at(&only, 11, (20.0, 20.0)), [120.0, 20.0]);
+        // A disabled chart drives nothing.
+        let mut off = graph.clone();
+        off.node_mut(id).unwrap().enabled = false;
+        assert_eq!(at(&off, 11, (10.0, 20.0)), [10.0, 20.0]);
     }
 
     #[test]

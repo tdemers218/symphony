@@ -299,7 +299,7 @@ fn drawings_under(s: &Session, id: NodeId) -> Vec<(symphony_core::id::Id, Affine
         let mut m = Affine::IDENTITY;
         for &n in chain.iter().rev() {
             if let Some(NodeKind::Peg(p)) = graph.node(n).map(|n| &n.kind) {
-                m = m.compose(p.transform_at(s.frame));
+                m = m.compose(graph.peg_transform(n, p, s.frame));
             }
         }
         if let Some(d) = s.doc.exposed(layer, s.frame) {

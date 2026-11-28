@@ -50,6 +50,7 @@ pub enum Command {
     ToggleSmartJoint(symphony_core::graph::NodeId),
     AddDrawingNode,
     AddNode(symphony_core::graph::NodeKind),
+    FollowChart,
 }
 
 /// Settings that search can flip directly.

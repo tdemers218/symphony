@@ -11,6 +11,8 @@
 //! spacing, and respacing never moves the path. Scale and rotation are
 //! their own keyed channels on the same timeline.
 
+use std::sync::{Arc, Mutex, PoisonError};
+
 use serde::{Deserialize, Serialize};
 
 use crate::anim::Value;
@@ -99,7 +101,7 @@ fn unit_scale() -> [Value; 2] {
     [Value::Constant(1.0), Value::Constant(1.0)]
 }
 
-fn yes() -> bool {
+pub(crate) fn yes() -> bool {
     true
 }
 
@@ -598,6 +600,28 @@ pub struct MotionSample {
     /// Position, rotation and scale as one transform (scale, then
     /// rotate, then move).
     pub transform: Affine,
+}
+
+/// The built curve for `chart`, shared by everything that samples it.
+/// Keyed by the chart's content, so an unchanged chart is never rebuilt
+/// and an edited one gets a fresh curve; the oldest entries are dropped.
+pub fn shared_curve(chart: &Chart) -> Arc<ChartCurve> {
+    const KEEP: usize = 32;
+    static CACHE: Mutex<Vec<(Chart, Arc<ChartCurve>)>> = Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(i) = cache.iter().rposition(|(c, _)| c == chart) {
+        let curve = cache[i].1.clone();
+        // Most recent last, so eviction takes the oldest.
+        let hit = cache.remove(i);
+        cache.push(hit);
+        return curve;
+    }
+    let curve = Arc::new(ChartCurve::new(chart));
+    if cache.len() >= KEEP {
+        cache.remove(0);
+    }
+    cache.push((chart.clone(), curve.clone()));
+    curve
 }
 
 /// A chart made ready to evaluate. Cheap to build (a few hundred curve
