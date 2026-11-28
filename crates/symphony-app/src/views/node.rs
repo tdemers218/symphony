@@ -378,6 +378,10 @@ pub(super) fn node_name(node: &Node) -> &str {
 
 pub fn add_from_search(s: &mut Session, state: &mut NodeViewState, kind: NodeKind) {
     let kind = fit_to_stage(s, kind);
+    // A Smart Chart stands on its own (nothing is wired to it): it's
+    // selected with the Transform tool, so the next click on the canvas
+    // places its first point.
+    let chart = matches!(kind, NodeKind::Chart(_));
     // A Mesh Warp found by search bends the selected layer straight away.
     if matches!(kind, NodeKind::MeshWarp(_)) {
         if let Some(node) = s.doc.layers.get(s.selected).map(|l| l.node) {
@@ -405,6 +409,14 @@ pub fn add_from_search(s: &mut Session, state: &mut NodeViewState, kind: NodeKin
     }
     add_node(s, kind, [x, y]);
     state.pan = Vec2::new(-x, (105.0 - y).min(0.0));
+    if chart {
+        s.fit_tool_to_context();
+    }
+}
+
+/// A new, empty Smart Chart.
+pub fn smart_chart() -> NodeKind {
+    NodeKind::Chart(Box::default())
 }
 
 /// Insert an effect node after the selected layer's drawing node, in one
@@ -584,13 +596,18 @@ fn add_node(s: &mut Session, kind: NodeKind, position: [f32; 2]) {
     // Placed clear of the others from the start (one undo step).
     let position = free_spot(s, position, W);
     let id = s.doc.graph.next_id();
+    let name = if matches!(kind, NodeKind::Chart(_)) {
+        unique_name(s, kind_label(&kind))
+    } else {
+        kind_label(&kind).into()
+    };
     s.history.apply(
         &mut s.doc,
         "Add node",
         vec![Edit::AddNode {
             id,
             node: Node {
-                name: kind_label(&kind).into(),
+                name,
                 kind,
                 enabled: true,
             },
@@ -598,6 +615,19 @@ fn add_node(s: &mut Session, kind: NodeKind, position: [f32; 2]) {
         }],
     );
     s.select_graph_node(id, true);
+}
+
+/// `base`, or `base 2`, `base 3`... when a node already has that name, so
+/// several charts are told apart in the Timeline and search.
+fn unique_name(s: &Session, base: &str) -> String {
+    let taken = |name: &str| s.doc.graph.nodes().any(|(_, n)| n.name == name);
+    if !taken(base) {
+        return base.to_owned();
+    }
+    (2..)
+        .map(|i| format!("{base} {i}"))
+        .find(|name| !taken(name))
+        .unwrap_or_else(|| base.to_owned())
 }
 
 /// Add `bone` under `parent` (a Skeleton or a bone), connected, as one
@@ -2254,6 +2284,7 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
                     .suffix("°"),
             );
         }
+        NodeKind::Chart(chart) => chart_form(ui, chart, draft.id),
         _ => {}
     }
     // Pegs apply live, so the drawing moves as you drag a value: their
@@ -2261,7 +2292,11 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
     // the node itself is what changes. One drag is one undo step.
     if matches!(
         draft.node.kind,
-        NodeKind::Peg(_) | NodeKind::Skeleton(_) | NodeKind::Bone(_) | NodeKind::MeshWarp(_)
+        NodeKind::Peg(_)
+            | NodeKind::Skeleton(_)
+            | NodeKind::Bone(_)
+            | NodeKind::MeshWarp(_)
+            | NodeKind::Chart(_)
     ) && draft.node.kind != draft.initial.kind
         && draft.node.enabled == draft.initial.enabled
     {
@@ -2289,9 +2324,14 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
                     return;
                 }
             }
+            let name = if matches!(after.kind, NodeKind::Chart(_)) {
+                "Change chart"
+            } else {
+                "Change transform"
+            };
             s.history.apply_merged(
                 &mut s.doc,
-                "Change transform",
+                name,
                 &key,
                 Edit::SetNodeProperties {
                     id: draft.id,
@@ -2326,8 +2366,14 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
     let keyed = s.doc.graph.has_key(draft.id, s.frame);
     let has_staged_controls = !matches!(
         draft.node.kind,
-        NodeKind::Peg(_) | NodeKind::Skeleton(_) | NodeKind::Bone(_) | NodeKind::MeshWarp(_)
+        NodeKind::Peg(_)
+            | NodeKind::Skeleton(_)
+            | NodeKind::Bone(_)
+            | NodeKind::MeshWarp(_)
+            | NodeKind::Chart(_)
     );
+    // A chart's timing lives in its points, not in node keys.
+    let keyable = !matches!(draft.node.kind, NodeKind::Chart(_));
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui| {
         if (has_staged_controls || changed)
@@ -2342,6 +2388,9 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
             } else {
                 apply_properties(s, draft, use_key, false);
             }
+        }
+        if !keyable {
+            return;
         }
         if ui
             .add_enabled(
@@ -2360,6 +2409,47 @@ fn property_form(ui: &mut egui::Ui, s: &mut Session, draft: &mut PropertyDraft) 
             apply_properties(s, draft, false, true);
         }
     });
+}
+
+/// A Smart Chart's own properties: how it shows, and what's on it. The
+/// points themselves are edited on the canvas.
+fn chart_form(ui: &mut egui::Ui, chart: &mut symphony_core::chart::Chart, id: NodeId) {
+    use symphony_core::chart::Role;
+    property_heading(ui, "Smart Chart");
+    property_row(ui, "Colour", |ui| {
+        let shown = super::chart_edit::colour(chart, id);
+        let mut rgb = [shown.r(), shown.g(), shown.b()];
+        let before = rgb;
+        super::colour_picker::rgb(ui, &mut rgb);
+        if rgb != before {
+            chart.colour = Some(rgb);
+        }
+    });
+    widgets::checkbox(ui, &mut chart.visible, "Show on the canvas")
+        .on_hover_text("Hiding only hides the guide; what it drives is unchanged.");
+    widgets::checkbox(ui, &mut chart.locked, "Lock")
+        .on_hover_text("Shown, but its points can't be moved.");
+    ui.add_space(6.0);
+    let keys = chart.points.iter().filter(|p| p.role == Role::Key).count();
+    let breakdowns = chart.points.len() - keys;
+    let summary = match chart.range() {
+        Some((a, b)) if a != b => format!(
+            "Frames {a} to {b} · {keys} key{} · {breakdowns} breakdown{}",
+            if keys == 1 { "" } else { "s" },
+            if breakdowns == 1 { "" } else { "s" },
+        ),
+        Some((a, _)) => format!("One point, on frame {a}"),
+        None => "No points yet".to_owned(),
+    };
+    ui.label(summary);
+    ui.label(
+        egui::RichText::new(
+            "With the Transform tool, click the canvas to place the chart on the \
+             current frame; drag a point to move it.",
+        )
+        .font(theme::dense())
+        .color(theme::TEXT_SECONDARY),
+    );
 }
 
 fn apply_name(s: &mut Session, draft: &mut PropertyDraft) {
@@ -2985,7 +3075,7 @@ fn card_width(graph: &symphony_core::graph::Graph, id: NodeId) -> f32 {
 /// (danger) are kept for their meanings. Types beyond the table reuse a
 /// table colour shifted lighter or darker, so they read as related.
 pub fn kind_colour(kind: &NodeKind) -> egui::Color32 {
-    const TABLE: [(&str, (u8, u8, u8)); 13] = [
+    const TABLE: [(&str, (u8, u8, u8)); 14] = [
         ("Drawing", (111, 194, 168)),
         ("Peg", (186, 150, 222)),
         ("Skeleton", (181, 139, 196)),
@@ -2999,6 +3089,7 @@ pub fn kind_colour(kind: &NodeKind) -> egui::Color32 {
         ("Opacity", (150, 206, 222)),
         ("Blend Modes", (232, 156, 122)),
         ("Gradient", (172, 204, 118)),
+        ("Smart Chart", (240, 122, 160)),
     ];
     let label = kind_label(kind);
     if let Some((_, (r, g, b))) = TABLE.iter().find(|(name, _)| *name == label) {
@@ -4397,9 +4488,17 @@ pub fn library(ui: &mut egui::Ui, s: &mut Session, state: &mut NodeViewState) {
                 column: symphony_core::id::Id(0),
             };
             egui::ScrollArea::vertical().show(ui, |ui| {
-                for group in ["Artwork", "Rigging", "Compositing", "Effects", "Output"] {
+                for group in [
+                    "Artwork",
+                    "Rigging",
+                    "Motion",
+                    "Compositing",
+                    "Effects",
+                    "Output",
+                ] {
                     let items: Vec<_> = std::iter::once(drawing.clone())
                         .chain(addable_nodes())
+                        .chain([smart_chart()])
                         .chain([NodeKind::Display, NodeKind::Write])
                         .filter(|kind| {
                             let (category, description) = library_details(kind);

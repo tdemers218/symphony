@@ -2486,3 +2486,72 @@ fn onion_alignment_moves_the_ghost_and_escape_restores_it() {
     assert!(harness.state().s.onion.alignment_edit.is_none());
     assert_eq!(harness.state().s.onion.alignment[0].offset, [0.0, 0.0]);
 }
+
+/// Smart Charts on the canvas: with a new chart selected (Transform),
+/// clicking places a point on the current frame; dragging a point moves
+/// it as one undo step; the tool stays Transform while the chart is
+/// selected.
+#[test]
+fn a_smart_chart_is_placed_and_dragged_on_the_canvas() {
+    use symphony_core::graph::NodeKind;
+    let mut h = rig();
+    {
+        let s = &mut h.state_mut().s;
+        let mut nodes = crate::views::node::NodeViewState::default();
+        crate::views::node::add_from_search(s, &mut nodes, crate::views::node::smart_chart());
+        s.fit_tool_to_context();
+        assert_eq!(s.tool, Tool::Transform, "a chart keeps Transform");
+    }
+    let id = h.state().s.selected_node.unwrap();
+    h.run_steps(2);
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let press = |h: &mut Harness<'static, Rig>, x: f32, y: f32| {
+        let p = h.state().canvas.to_screen(x, y);
+        h.input_mut()
+            .events
+            .extend([egui::Event::PointerMoved(p), button(p, true)]);
+        h.step();
+        h.input_mut().events.push(button(p, false));
+        h.step();
+        h.run_steps(1);
+    };
+    let chart = |h: &Harness<'static, Rig>| match &h.state().s.doc.graph.node(id).unwrap().kind {
+        NodeKind::Chart(c) => (**c).clone(),
+        _ => unreachable!(),
+    };
+    h.state_mut().s.frame = 1;
+    press(&mut h, 0.0, 0.0);
+    h.state_mut().s.frame = 9;
+    press(&mut h, 200.0, 0.0);
+    let c = chart(&h);
+    let placed: Vec<(u32, [i32; 2])> = c
+        .points
+        .iter()
+        .map(|p| (p.frame, [p.pos[0].round() as i32, p.pos[1].round() as i32]))
+        .collect();
+    assert_eq!(placed, vec![(1, [0, 0]), (9, [200, 0])]);
+    // Drag the second point down 100.
+    let undo = h.state().s.history.undo_len();
+    let start = h.state().canvas.to_screen(200.0, 0.0);
+    let end = h.state().canvas.to_screen(200.0, 100.0);
+    h.input_mut()
+        .events
+        .extend([egui::Event::PointerMoved(start), button(start, true)]);
+    h.step();
+    for i in 1..=5 {
+        let p = start + (end - start) * (i as f32 / 5.0);
+        h.input_mut().events.push(egui::Event::PointerMoved(p));
+        h.step();
+    }
+    h.input_mut().events.push(button(end, false));
+    h.run_steps(2);
+    let moved = chart(&h).point_on(9).unwrap().pos;
+    assert!((moved[1] - 100.0).abs() < 1.0, "moved to {moved:?}");
+    assert_eq!(chart(&h).points.len(), 2, "a drag adds no point");
+    assert_eq!(h.state().s.history.undo_len(), undo + 1, "one undo step");
+}

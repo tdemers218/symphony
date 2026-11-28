@@ -850,6 +850,53 @@ impl SymphonyApp {
                     }
                 }
             }
+            // SYMPHONY_SHOT_CHART: two Smart Charts, one selected on an
+            // in-between frame, for reviewing the overlay.
+            if std::env::var_os("SYMPHONY_SHOT_CHART").is_some() {
+                use symphony_core::chart::{Chart, Role};
+                let mut nodes = views::node::NodeViewState::default();
+                let mut add = |s: &mut Session, pts: &[(u32, [f32; 2])], ease: bool| {
+                    let mut c = Chart::default();
+                    for &(f, p) in pts {
+                        c.set_point(f, p, Role::Key);
+                    }
+                    if ease {
+                        for p in &mut c.points {
+                            p.timing.ease_out = 0.8;
+                            p.timing.ease_in = 0.8;
+                        }
+                    }
+                    views::node::add_from_search(
+                        s,
+                        &mut nodes,
+                        symphony_core::graph::NodeKind::Chart(Box::new(c)),
+                    );
+                    s.selected_node
+                };
+                add(
+                    &mut s,
+                    &[
+                        (1, [-520.0, 260.0]),
+                        (9, [-80.0, 40.0]),
+                        (17, [480.0, 220.0]),
+                    ],
+                    false,
+                );
+                let main = add(
+                    &mut s,
+                    &[
+                        (1, [-620.0, 120.0]),
+                        (7, [-240.0, -300.0]),
+                        (13, [220.0, -180.0]),
+                        (19, [600.0, 160.0]),
+                    ],
+                    true,
+                );
+                if let Some(id) = main {
+                    s.select_graph_node(id, false);
+                }
+                s.frame = 10;
+            }
             if std::env::var_os("SYMPHONY_SHOT_PAINT").is_some() {
                 s.tool = Tool::Paint;
                 if let Some(id) = s.doc.palette.swatches.get(1).map(|sw| sw.id) {
@@ -2834,6 +2881,20 @@ impl SymphonyApp {
                 &format!("node.add.{name}"),
             )
             .words(aliases);
+            entry.context.clone_from(&node_views);
+            out.push(entry);
+        }
+        {
+            let mut entry = Entry::new(
+                "Add Smart Chart",
+                Kind::Node,
+                Command::AddNode(views::node::smart_chart()),
+                "node.add.Smart Chart",
+            )
+            .words(
+                "node create chart smart timing spacing motion path arc trajectory guide \
+                 breakdown key pose",
+            );
             entry.context.clone_from(&node_views);
             out.push(entry);
         }

@@ -2076,6 +2076,8 @@ impl Session {
                         | symphony_core::graph::NodeKind::MeshWarp(_)
                         | symphony_core::graph::NodeKind::Skeleton(_)
                         | symphony_core::graph::NodeKind::Bone(_)
+                        // A Smart Chart is edited with Transform too.
+                        | symphony_core::graph::NodeKind::Chart(_)
                 )
             });
         if peg {

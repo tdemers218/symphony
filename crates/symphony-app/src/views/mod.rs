@@ -1,4 +1,5 @@
 pub mod camera;
+pub mod chart_edit;
 mod colour_picker;
 pub mod export;
 pub mod function;

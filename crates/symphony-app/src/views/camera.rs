@@ -57,6 +57,8 @@ pub struct CanvasState {
     pub render_effects: bool,
     /// The selected Mesh Warp's grid, being edited.
     warp_edit: super::warp_edit::WarpEdit,
+    /// Smart Charts drawn over Camera, and the selected one being edited.
+    chart_edit: super::chart_edit::ChartEdit,
     rig_edit: super::rig_edit::RigEdit,
     /// Text being typed with the Text tool.
     text: Option<TextDraft>,
@@ -87,6 +89,7 @@ impl Default for CanvasState {
             display: Default::default(),
             render_effects: true,
             warp_edit: Default::default(),
+            chart_edit: Default::default(),
             rig_edit: Default::default(),
             text: None,
             bent: Default::default(),
@@ -1915,8 +1918,15 @@ pub fn ui(
         super::rig_edit::draw_rest_guide(&painter, s, view);
     }
     state.select.camera_space = !drawing_only;
+    // Charts live in stage space, so they show in Camera (not in a
+    // drawing's own space).
+    let chart_busy = !tilt_busy
+        && !navigating_now
+        && !drawing_only
+        && super::chart_edit::ui(ui, &response, &painter, s, &mut state.chart_edit, view);
     let warp_busy = !tilt_busy
         && !navigating_now
+        && !chart_busy
         && super::warp_edit::ui(ui, &response, &painter, s, &mut state.warp_edit, view);
     let rig_busy = if !tilt_busy && !navigating_now && !drawing_only {
         super::rig_edit::ui(ui, &response, &painter, s, &mut state.rig_edit, view)
@@ -1927,6 +1937,7 @@ pub fn ui(
     if matches!(s.tool, Tool::Select | Tool::Transform)
         && !navigating_now
         && !warp_busy
+        && !chart_busy
         && !tilt_busy
         && !rig_busy
     {

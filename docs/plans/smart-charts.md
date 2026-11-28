@@ -62,11 +62,11 @@ Timing { hold, ease_out, ease_in, spacing: Vec<[t, s]> }
 
 ## Milestones (the brief's order, [21])
 
-1. **Motion foundation.**
+1. **Motion foundation.** *Done.*
    - `chart.rs`: model, curve and timing maths, arc-length tables, `MotionSample`.
    - `NodeKind::Chart`, serialization, undo through `SetNodeProperties`.
    - Tests from [22]: anchors exact, uneven spacing, extension, manual tangents kept, insertion, coincident points, duplicate frames, holds, space/time independence, scale, rotation wrap and multi-turn, fractional frames, round trip, old projects.
-2. **Canvas workflow.**
+2. **Canvas workflow.** *Done (`views/chart_edit.rs`).* Charts show in Camera only for now; the Drawing view shows them in Milestone 3.
    - Search "chart" + Enter creates a chart, selects it and switches to Transform.
    - Clicking the canvas adds a point at the current frame; dragging points works.
    - Path overlay with frame marks (spacing shows speed), the current-frame mark, direction, frame numbers on keys.
