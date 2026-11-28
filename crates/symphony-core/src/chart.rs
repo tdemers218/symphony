@@ -303,6 +303,39 @@ impl Chart {
         self.scale[0].set_key(frame, scale[0]);
         self.scale[1].set_key(frame, scale[1]);
     }
+
+    /// Every frame the chart has something on (a point, or a scale or
+    /// rotation key), for the Timeline.
+    pub fn key_frames(&self) -> impl Iterator<Item = u32> + '_ {
+        self.points.iter().map(|p| p.frame).chain(
+            self.scale
+                .iter()
+                .chain([&self.rotation])
+                .flat_map(|v| v.keys().iter().map(|k| k.frame)),
+        )
+    }
+
+    /// Make room for `count` new frames starting at `from`: points and
+    /// keys on or after it move later. A segment that spans the gap gets
+    /// longer and keeps its shape and spacing (timing is a fraction of
+    /// the segment, so it stretches with it).
+    pub fn insert_frames(&mut self, from: u32, count: u32) {
+        let later = |f: &mut u32| {
+            if *f >= from {
+                *f = f.saturating_add(count);
+            }
+        };
+        for p in &mut self.points {
+            later(&mut p.frame);
+        }
+        for v in self.scale.iter_mut().chain([&mut self.rotation]) {
+            if let Value::Keys(keys) = v {
+                for k in keys.iter_mut() {
+                    later(&mut k.frame);
+                }
+            }
+        }
+    }
 }
 
 /// The left or right part (time `from` to `to`) of a segment's timing,
@@ -1031,5 +1064,28 @@ mod tests {
         let bare: Chart =
             serde_json::from_str(r#"{"points":[{"id":0,"frame":1,"pos":[1,2]}]}"#).unwrap();
         assert!(bare.visible && bare.scale[0] == Value::Constant(1.0));
+    }
+
+    /// Inserting frames inside the chart moves the later points and keys
+    /// and stretches the segment that spans the gap, keeping its path.
+    #[test]
+    fn inserted_frames_stretch_the_chart_in_time() {
+        let mut c = Chart::default();
+        c.set_point(1, [0.0, 0.0], Role::Key);
+        c.set_point(9, [80.0, 40.0], Role::Key);
+        c.set_point(17, [160.0, 0.0], Role::Key);
+        c.set_rotation(9, 90.0);
+        c.set_scale(17, [2.0, 2.0]);
+        let path = ChartCurve::new(&c).path(8);
+        c.insert_frames(5, 4);
+        let frames: Vec<u32> = c.points.iter().map(|p| p.frame).collect();
+        assert_eq!(frames, vec![1, 13, 21]);
+        assert_eq!(c.rotation.keys()[0].frame, 13);
+        assert_eq!(c.scale[0].keys()[0].frame, 21);
+        assert_eq!(ChartCurve::new(&c).path(8), path, "same path");
+        let mut seen: Vec<u32> = c.key_frames().collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen, vec![1, 13, 21]);
     }
 }

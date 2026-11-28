@@ -2699,6 +2699,8 @@ impl Session {
                     }
                 }
                 NodeKind::Bone(bone) => bone.values_mut().for_each(shift),
+                // A chart keeps up with the drawings it was placed on.
+                NodeKind::Chart(chart) => chart.insert_frames(from, count),
                 _ => continue,
             }
             if &after != node {
@@ -4360,6 +4362,29 @@ mod tests {
         assert_eq!(s.doc.peg(0).unwrap().x.at(2), 20.0);
         s.undo();
         assert_eq!(s.doc.settings.fps, 24.0);
+    }
+
+    /// A Smart Chart retimes with the drawings: in-betweens inserted
+    /// inside it push its later points out, in the same undo step.
+    #[test]
+    fn inserted_inbetweens_retime_smart_charts() {
+        let mut s = Session::new_scene();
+        let mut nodes = crate::views::node::NodeViewState::default();
+        crate::views::node::add_from_search(&mut s, &mut nodes, crate::views::node::smart_chart());
+        let id = s.selected_node.unwrap();
+        s.frame = 1;
+        crate::views::chart_edit::place(&mut s, id, [0.0, 0.0]);
+        s.frame = 9;
+        crate::views::chart_edit::place(&mut s, id, [90.0, 0.0]);
+        let frames = |s: &Session| match &s.doc.graph.node(id).unwrap().kind {
+            NodeKind::Chart(c) => c.points.iter().map(|p| p.frame).collect::<Vec<_>>(),
+            _ => unreachable!(),
+        };
+        s.frame = 4;
+        s.insert_inbetweens(2);
+        assert_eq!(frames(&s), vec![1, 11]);
+        s.undo();
+        assert_eq!(frames(&s), vec![1, 9]);
     }
 
     fn line(s: &mut Session, x0: f32, x1: f32) -> Stroke {

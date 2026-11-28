@@ -894,6 +894,7 @@ pub fn timeline(ui: &mut egui::Ui, s: &mut Session, t: &mut TimingState, profile
                     frames.extend(value.keys().iter().map(|key| key.frame));
                 }
             }
+            NodeKind::Chart(chart) => frames.extend(chart.key_frames()),
             NodeKind::Display => {
                 let motion = &s.doc.camera_motion;
                 for value in [&s.doc.camera_fov, &motion.x, &motion.y, &motion.dolly] {
