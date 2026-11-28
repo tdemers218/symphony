@@ -2290,6 +2290,75 @@ fn points_warp_bends_only_the_connected_artwork() {
     assert!(ink(965, 840), "the ball (no point on it) didn't move");
 }
 
+/// Shift+drag from one chart point to the next draws that segment's path:
+/// the chart then arcs where the stroke went, as one undo step.
+#[test]
+fn a_chart_path_is_drawn_between_two_points() {
+    use symphony_core::chart::PathKind;
+    use symphony_core::graph::NodeKind;
+    let mut h = rig();
+    let id = {
+        let s = &mut h.state_mut().s;
+        let mut nodes = crate::views::node::NodeViewState::default();
+        crate::views::node::add_from_search(s, &mut nodes, crate::views::node::smart_chart());
+        let id = s.selected_node.unwrap();
+        s.frame = 1;
+        crate::views::chart_edit::place(s, id, [0.0, 0.0]);
+        s.frame = 9;
+        crate::views::chart_edit::place(s, id, [200.0, 0.0]);
+        s.end_gesture();
+        id
+    };
+    h.run_steps(2);
+    let chart = |h: &Harness<'static, Rig>| match &h.state().s.doc.graph.node(id).unwrap().kind {
+        NodeKind::Chart(c) => (**c).clone(),
+        _ => unreachable!(),
+    };
+    let undo = h.state().s.history.undo_len();
+    // An arc 80 up (or down) from the line between the points, in stage units.
+    let canvas = &h.state().canvas;
+    let points: Vec<egui::Pos2> = (0..=24)
+        .map(|i| {
+            let t = i as f32 / 24.0;
+            canvas.to_screen(t * 200.0, (t * std::f32::consts::PI).sin() * 80.0)
+        })
+        .collect();
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::SHIFT,
+    };
+    h.input_mut()
+        .events
+        .push(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(points[0]),
+        button(points[0], true),
+    ]);
+    h.step();
+    for &p in &points[1..] {
+        h.input_mut().events.push(egui::Event::PointerMoved(p));
+        h.step();
+    }
+    h.input_mut().events.push(button(points[24], false));
+    h.run_steps(2);
+    h.input_mut()
+        .events
+        .push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    let c = chart(&h);
+    assert_eq!(c.points[0].path, PathKind::Drawn, "the segment is drawn");
+    assert_eq!(c.points.len(), 2, "drawing adds no point");
+    let mid = symphony_core::chart::ChartCurve::new(&c)
+        .position(5.0)
+        .unwrap();
+    assert!(
+        (mid[1].abs() - 80.0).abs() < 10.0 && (mid[0] - 100.0).abs() < 8.0,
+        "{mid:?}"
+    );
+    assert_eq!(h.state().s.history.undo_len(), undo + 1, "one undo step");
+}
+
 /// A quick drag takes the Mesh Warp point under the press, even when the
 /// pointer is nearer a neighbour by the time the drag starts.
 #[test]

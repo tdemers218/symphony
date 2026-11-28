@@ -56,6 +56,8 @@ pub enum PathKind {
     #[default]
     Curve,
     Line,
+    /// Drawn by hand: the point's `drawn` stroke, smoothed.
+    Drawn,
 }
 
 /// The timing of the segment from a point to the next.
@@ -91,6 +93,12 @@ pub struct ChartPoint {
     pub path: PathKind,
     #[serde(default)]
     pub timing: Timing,
+    /// The segment to the next point as drawn by hand (`PathKind::Drawn`):
+    /// a smoothed stroke, evenly spaced, stored relative to the line from
+    /// this point (0, 0) to the next (1, 0). Moving either point stretches
+    /// and turns it with them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drawn: Vec<[f32; 2]>,
     /// The drawing exposed when the point was placed, so retiming can
     /// tell a point tied to a drawing from one tied to a frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,6 +212,7 @@ impl Chart {
                 tangent: Tangent::Auto,
                 path: PathKind::Curve,
                 timing,
+                drawn: Vec::new(),
                 drawing: None,
             },
         );
@@ -233,7 +242,12 @@ impl Chart {
         let lerp = |a: [f32; 2], b: [f32; 2]| [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
         let (a, b, c) = (lerp(c0, c1), lerp(c1, c2), lerp(c2, c3));
         let (ab, bc) = (lerp(a, b), lerp(b, c));
-        let mid = lerp(ab, bc);
+        // On a drawn segment the point goes on the stroke itself.
+        let mid = if s.drawn.is_some() {
+            s.point(u)
+        } else {
+            lerp(ab, bc)
+        };
         let sub = |p: [f32; 2], q: [f32; 2]| [p[0] - q[0], p[1] - q[1]];
         // Keep every other segment as it is: the handles the neighbours
         // had become theirs to keep.
@@ -264,6 +278,15 @@ impl Chart {
             (timing(0.0, t), timing(t, 1.0))
         };
         self.points[left].timing = first;
+        // A drawn segment splits along its stroke: each half keeps its
+        // part of the shape.
+        let drawn_halves = (self.points[left].path == PathKind::Drawn)
+            .then_some(s.drawn.as_ref())
+            .flatten()
+            .map(|line| split_polyline(line, u));
+        if let Some((a_half, _)) = &drawn_halves {
+            self.points[left].drawn = normalise(a_half).unwrap_or_default();
+        }
         self.points.insert(
             right,
             ChartPoint {
@@ -281,9 +304,15 @@ impl Chart {
                 },
                 path: self.points[left].path,
                 timing: second,
+                drawn: Vec::new(),
                 drawing: None,
             },
         );
+        if let Some((_, b_half)) = drawn_halves {
+            if let Some(p) = self.points.get_mut(right) {
+                p.drawn = normalise(&b_half).unwrap_or_default();
+            }
+        }
         Some(id)
     }
 
@@ -377,6 +406,27 @@ impl Chart {
         if let Some(&(before, after)) = curve.handles.get(i) {
             self.points[i].tangent = Tangent::Manual { before, after };
         }
+    }
+
+    /// Shape the segment from point `id` to the next with a stroke drawn
+    /// from one to the other (chart coordinates, in drawing order). The
+    /// stroke is smoothed and evenly spaced, and its ends land exactly on
+    /// the two points. False when there's no next point or the stroke is
+    /// too short to use.
+    pub fn set_drawn(&mut self, id: PointId, stroke: &[[f32; 2]]) -> bool {
+        let Some(i) = self.points.iter().position(|p| p.id == id) else {
+            return false;
+        };
+        if i + 1 >= self.points.len() {
+            return false;
+        }
+        let Some(shape) = normalise(&smooth_stroke(stroke)) else {
+            return false;
+        };
+        let p = &mut self.points[i];
+        p.drawn = shape;
+        p.path = PathKind::Drawn;
+        true
     }
 
     /// Every frame the chart has something on (a point, or a scale or
@@ -601,6 +651,9 @@ struct Segment {
     from: u32,
     to: u32,
     c: [[f32; 2]; 4],
+    /// A drawn segment's stroke in chart coordinates, evenly spaced:
+    /// used instead of `c` for its shape.
+    drawn: Option<Vec<[f32; 2]>>,
     /// Arc length from the start at `i / LUT` of the curve parameter.
     lengths: [f32; LUT + 1],
     timing: TimingMap,
@@ -616,6 +669,14 @@ fn bezier(c: &[[f32; 2]; 4], u: f32) -> [f32; 2] {
 }
 
 impl Segment {
+    /// The point at curve parameter `u` (0 to 1).
+    fn point(&self, u: f32) -> [f32; 2] {
+        match &self.drawn {
+            Some(line) => along_polyline(line, u),
+            None => bezier(&self.c, u),
+        }
+    }
+
     fn length(&self) -> f32 {
         self.lengths[LUT]
     }
@@ -635,7 +696,7 @@ impl Segment {
     }
 
     fn at(&self, d: f32) -> [f32; 2] {
-        bezier(&self.c, self.param_at(d))
+        self.point(self.param_at(d))
     }
 }
 
@@ -730,20 +791,25 @@ impl ChartCurve {
                         b.pos,
                     ]
                 };
-                let mut lengths = [0.0; LUT + 1];
-                let mut prev = c[0];
-                for k in 1..=LUT {
-                    let p = bezier(&c, k as f32 / LUT as f32);
-                    lengths[k] = lengths[k - 1] + (p[0] - prev[0]).hypot(p[1] - prev[1]);
-                    prev = p;
-                }
-                Segment {
+                let drawn = (a.path == PathKind::Drawn)
+                    .then(|| denormalise(&a.drawn, a.pos, b.pos))
+                    .flatten();
+                let mut segment = Segment {
                     from: a.frame,
                     to: b.frame,
                     c,
-                    lengths,
+                    drawn,
+                    lengths: [0.0; LUT + 1],
                     timing: TimingMap::new(&a.timing),
+                };
+                let mut prev = segment.point(0.0);
+                for k in 1..=LUT {
+                    let p = segment.point(k as f32 / LUT as f32);
+                    segment.lengths[k] =
+                        segment.lengths[k - 1] + (p[0] - prev[0]).hypot(p[1] - prev[1]);
+                    prev = p;
                 }
+                segment
             })
             .collect();
         ChartCurve {
@@ -864,7 +930,9 @@ impl ChartCurve {
             out.push(p);
         }
         for s in &self.segments {
-            out.extend((1..=n).map(|i| bezier(&s.c, i as f32 / n as f32)));
+            // A drawn segment keeps its detail: as many points as it has.
+            let n = s.drawn.as_ref().map_or(n, |line| line.len().max(n));
+            out.extend((1..=n).map(|i| s.point(i as f32 / n as f32)));
         }
         out
     }
@@ -882,9 +950,9 @@ impl ChartCurve {
             return Some(0.0);
         }
         let mut best = (f32::INFINITY, 0.0);
-        let mut a = s.c[0];
+        let mut a = s.point(0.0);
         for k in 0..LUT {
-            let b = bezier(&s.c, (k + 1) as f32 / LUT as f32);
+            let b = s.point((k + 1) as f32 / LUT as f32);
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
             let len2 = dx * dx + dy * dy;
             let u = if len2 > 1e-12 {
@@ -913,6 +981,112 @@ impl ChartCurve {
 /// Every point's handles: manual ones as set, corners flat, automatic
 /// ones from centripetal Catmull-Rom over the neighbours on curved
 /// segments (a straight segment or a corner ends the smooth run).
+/// Points drawn in a stroke this many times over, evenly spaced, then
+/// smoothed: enough for any hand-drawn arc, light to store.
+const DRAWN_POINTS: usize = 48;
+
+/// `line` evenly spaced: `n` points the same distance apart along it,
+/// first and last kept.
+fn resample(line: &[[f32; 2]], n: usize) -> Vec<[f32; 2]> {
+    let mut total = vec![0.0f32];
+    for w in line.windows(2) {
+        let d = (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]);
+        total.push(total.last().copied().unwrap_or(0.0) + d);
+    }
+    let length = total.last().copied().unwrap_or(0.0);
+    if line.len() < 2 || length <= 1e-6 || n < 2 {
+        return line.to_vec();
+    }
+    (0..n)
+        .map(|k| {
+            let want = length * k as f32 / (n - 1) as f32;
+            let i = total
+                .partition_point(|&t| t < want)
+                .clamp(1, line.len() - 1);
+            let (a, b) = (total[i - 1], total[i]);
+            let f = if b > a { (want - a) / (b - a) } else { 0.0 };
+            let (p, q) = (line[i - 1], line[i]);
+            [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f]
+        })
+        .collect()
+}
+
+/// A hand-drawn stroke made calm: evenly spaced, then softened a few
+/// times (each point eased towards its neighbours; the ends stay), then
+/// evenly spaced again so speed along it is even.
+pub fn smooth_stroke(stroke: &[[f32; 2]]) -> Vec<[f32; 2]> {
+    let mut line = resample(stroke, DRAWN_POINTS + 16);
+    for _ in 0..4 {
+        let copy = line.clone();
+        for i in 1..line.len().saturating_sub(1) {
+            for k in 0..2 {
+                line[i][k] = (copy[i - 1][k] + 2.0 * copy[i][k] + copy[i + 1][k]) / 4.0;
+            }
+        }
+    }
+    resample(&line, DRAWN_POINTS)
+}
+
+/// `line` relative to the line from its first point (0, 0) to its last
+/// (1, 0). None when its ends are on top of each other.
+fn normalise(line: &[[f32; 2]]) -> Option<Vec<[f32; 2]>> {
+    let (a, b) = (*line.first()?, *line.last()?);
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let len2 = d[0] * d[0] + d[1] * d[1];
+    if line.len() < 2 || len2 <= 1e-6 {
+        return None;
+    }
+    Some(
+        line.iter()
+            .map(|p| {
+                let q = [p[0] - a[0], p[1] - a[1]];
+                [
+                    (q[0] * d[0] + q[1] * d[1]) / len2,
+                    (d[0] * q[1] - d[1] * q[0]) / len2,
+                ]
+            })
+            .collect(),
+    )
+}
+
+/// A normalised stroke placed between `a` and `b`.
+fn denormalise(shape: &[[f32; 2]], a: [f32; 2], b: [f32; 2]) -> Option<Vec<[f32; 2]>> {
+    if shape.len() < 2 {
+        return None;
+    }
+    let d = [b[0] - a[0], b[1] - a[1]];
+    Some(
+        shape
+            .iter()
+            .map(|&[u, v]| [a[0] + u * d[0] - v * d[1], a[1] + u * d[1] + v * d[0]])
+            .collect(),
+    )
+}
+
+/// The point `u` (0 to 1) of the way along an evenly spaced `line`.
+fn along_polyline(line: &[[f32; 2]], u: f32) -> [f32; 2] {
+    let x = u.clamp(0.0, 1.0) * (line.len() - 1) as f32;
+    let i = (x.floor() as usize).min(line.len() - 2);
+    let f = x - i as f32;
+    let (p, q) = (line[i], line[i + 1]);
+    [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f]
+}
+
+/// An evenly spaced `line` cut at `u` (0 to 1): both halves, each evenly
+/// spaced again.
+fn split_polyline(line: &[[f32; 2]], u: f32) -> (Vec<[f32; 2]>, Vec<[f32; 2]>) {
+    let cut = along_polyline(line, u);
+    let i = ((u.clamp(0.0, 1.0) * (line.len() - 1) as f32).floor() as usize).min(line.len() - 2);
+    let mut first: Vec<[f32; 2]> = line[..=i].to_vec();
+    first.push(cut);
+    let mut second = vec![cut];
+    second.extend_from_slice(&line[i + 1..]);
+    (
+        resample(&first, DRAWN_POINTS),
+        resample(&second, DRAWN_POINTS),
+    )
+}
+
 fn auto_handles(pts: &[&ChartPoint]) -> Vec<([f32; 2], [f32; 2])> {
     let n = pts.len();
     let dist = |a: [f32; 2], b: [f32; 2]| (b[0] - a[0]).hypot(b[1] - a[1]);
@@ -1329,6 +1503,72 @@ mod tests {
         assert!(!c.set_spacing(30, 0.5));
         c.even_spacing(c.points[1].id);
         assert!(c.points[0].timing.spacing.is_empty());
+    }
+
+    /// A drawn stroke between two keys becomes that segment's path:
+    /// smoothed, its ends exactly on the points, timing still even along
+    /// it. Moving a point stretches the drawn shape with it, and a point
+    /// added on it splits the stroke without moving the path.
+    #[test]
+    fn a_drawn_stroke_shapes_its_segment() {
+        let mut c = Chart::default();
+        let a = c.set_point(1, [0.0, 0.0], Role::Key);
+        c.set_point(11, [100.0, 0.0], Role::Key);
+        // A wobbly hump from one key to the other, drawn a bit off them.
+        let stroke: Vec<[f32; 2]> = (0..=40)
+            .map(|i| {
+                let t = i as f32 / 40.0;
+                let wobble = if i % 2 == 0 { 1.5 } else { -1.5 };
+                [
+                    2.0 + t * 96.0,
+                    (t * std::f32::consts::PI).sin() * 50.0 + wobble,
+                ]
+            })
+            .collect();
+        assert!(c.set_drawn(a, &stroke));
+        assert_eq!(c.points[0].path, PathKind::Drawn);
+        let curve = ChartCurve::new(&c);
+        assert_eq!(curve.position(1.0), Some([0.0, 0.0]));
+        let end = curve.position(11.0).unwrap();
+        assert!(
+            end[0].abs() - 100.0 < 1e-3 && end[1].abs() < 1e-3,
+            "{end:?}"
+        );
+        let mid = curve.position(6.0).unwrap();
+        assert!(
+            (mid[0] - 50.0).abs() < 3.0 && (mid[1] - 50.0).abs() < 5.0,
+            "{mid:?}"
+        );
+        // Smoothed: no wobble left between neighbouring frames' heights.
+        let ys: Vec<f32> = (2..=10)
+            .map(|f| curve.position(f as f32).unwrap()[1])
+            .collect();
+        assert!(
+            ys.windows(3).all(|w| (w[0] + w[2]) / 2.0 - w[1] < 1.0),
+            "{ys:?}"
+        );
+        // Twice as far apart: the hump is twice as big.
+        c.points[1].pos = [200.0, 0.0];
+        let wide = ChartCurve::new(&c).position(6.0).unwrap();
+        assert!(
+            (wide[0] - 100.0).abs() < 6.0 && (wide[1] - 100.0).abs() < 10.0,
+            "{wide:?}"
+        );
+        // A point added on the drawn path keeps the path where it was.
+        let before = ChartCurve::new(&c);
+        c.insert_on_curve(4, Role::Breakdown).unwrap();
+        let after = ChartCurve::new(&c);
+        for f in 1..=11 {
+            let (p, q) = (
+                before.position(f as f32).unwrap(),
+                after.position(f as f32).unwrap(),
+            );
+            assert!(
+                (p[0] - q[0]).abs() < 1.5 && (p[1] - q[1]).abs() < 1.5,
+                "frame {f}: {p:?} {q:?}"
+            );
+        }
+        assert_eq!(c.points[1].path, PathKind::Drawn);
     }
 
     /// Freezing a point's handles keeps the curve exactly as it was.

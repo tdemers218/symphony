@@ -907,6 +907,24 @@ impl SymphonyApp {
                 } else {
                     main
                 };
+                // =drawn: the main chart's first stretch drawn by hand.
+                let drawn = std::env::var("SYMPHONY_SHOT_CHART").is_ok_and(|v| v == "drawn");
+                if let (Some(id), true) = (main, drawn) {
+                    let stroke: Vec<[f32; 2]> = (0..=60)
+                        .map(|i| {
+                            let t = i as f32 / 60.0;
+                            [
+                                -620.0 + t * 380.0 + (t * std::f32::consts::TAU).sin() * 90.0,
+                                120.0 - t * 420.0 + (t * 3.0 * std::f32::consts::PI).sin() * 60.0,
+                            ]
+                        })
+                        .collect();
+                    views::chart_edit::edit(&mut s, id, "Draw chart path", None, |c| {
+                        if let Some(first) = c.points.first().map(|p| p.id) {
+                            c.set_drawn(first, &stroke);
+                        }
+                    });
+                }
                 if let Some(id) = main {
                     s.select_graph_node(id, false);
                 }
@@ -917,6 +935,8 @@ impl SymphonyApp {
                     7
                 } else if follow {
                     11
+                } else if drawn {
+                    4
                 } else {
                     10
                 };

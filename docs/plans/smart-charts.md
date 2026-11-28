@@ -111,6 +111,10 @@ In-betweening, lighting, texture tracking and motion-processing nodes ([15]–[1
 A paper timing chart in a glass-lite finish:
 - **Path and points:** a thin line with a soft glow of its own colour, and short ticks. A key is its frame number in a small glass circle; a breakdown is a glass triangle. The point on the current frame is filled with the chart's colour, and between points the current frame is an amber ring.
 - **Only what's being worked on shows.** Curve handles appear when the pointer nears the point (or it has handles of its own). The rotate and scale needle shows only when switched on from the bar.
+- **Drawn paths (Tristan, 2026-11-28):** with the bar's pencil on, or with Shift+drag, a stroke drawn from one point to the next becomes that segment's path (`PathKind::Drawn`).
+  The stroke is evenly spaced, softened, spaced again, and stored relative to the line between the two points, so moving either point stretches and turns it.
+  Timing and spacing work along it as on any segment. A point added on it splits the stroke, and "Drawn" on the bar (or "Use the automatic curve") returns to the curve.
+  Open: the neighbouring curves don't yet take their handles from the drawn ends, so a joint can show a slight corner.
 - **Concentric:** the bar is a capsule (radius 15) whose controls are 22 px capsules (radius 11) set 4 px in from every edge, and the Key/Breakdown highlight sits 2 px inside its track (radius 9). Every nested curve shares its centre with the one around it, as do the chips' rims, glows and the handle and knob dots.
 - **Controls:** a glass pill bar next to the point, placed where it hides least of the chart (above, below, or beside the point), with More for the rest. The same settings are in Node Properties. Esc finishes editing.
 - **Colours:** soft tones from the interface's own family (the Function view's curves), away from its meanings (selection blue, time amber, danger red).

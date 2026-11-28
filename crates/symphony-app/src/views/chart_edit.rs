@@ -193,6 +193,11 @@ pub struct ChartEdit {
     pub(crate) show_pose: bool,
     /// The bar's size when last shown, to choose where it covers least.
     bar_size: Option<Vec2>,
+    /// Drawing a path (the bar's pencil, or Shift+drag): a drag draws the
+    /// segment between the two points it starts and ends on.
+    pub(crate) draw_path: bool,
+    /// The stroke being drawn, on screen.
+    sketch: Option<Vec<Pos2>>,
     /// Scene and edit count the charts were last checked at.
     stamp: Option<(String, u64)>,
     built: HashMap<NodeId, Built>,
@@ -523,6 +528,7 @@ pub fn ui(
         bar_at,
         &mut state.card_pending,
         &mut state.show_pose,
+        &mut state.draw_path,
     ));
     if chart.locked {
         return true;
@@ -533,7 +539,47 @@ pub fn ui(
         // only starts once the pointer has moved, by which time it may be
         // nearer the next tick.
         let origin = ui.input(|i| i.pointer.press_origin()).or(pointer);
-        state.dragging = origin.and_then(grab_at).map(|g| (id, g));
+        let target = origin.and_then(grab_at);
+        // Drawing a path: with the pencil on, or Shift+drag from a point or
+        // empty canvas (Shift on a knob still snaps the turn).
+        let shift = ui.input(|i| i.modifiers.shift);
+        let sketching = chart.points.len() >= 2
+            && (state.draw_path
+                || (shift && matches!(target, None | Some(Grab::Point(_)) | Some(Grab::Tick(_)))));
+        if sketching {
+            state.sketch = origin.map(|p| vec![p]);
+            state.dragging = None;
+        } else {
+            state.dragging = target.map(|g| (id, g));
+        }
+    }
+    if let Some(stroke) = &mut state.sketch {
+        if let Some(p) = response.interact_pointer_pos() {
+            if stroke.last().is_none_or(|q| q.distance(p) > 1.5) {
+                stroke.push(p);
+            }
+        }
+        // The stroke as it's drawn: the chart's colour on a soft shadow.
+        let drop: Vec<Pos2> = stroke.iter().map(|p| *p + Vec2::new(0.0, 1.5)).collect();
+        painter.add(egui::Shape::line(
+            drop,
+            EStroke::new(3.5, Color32::from_black_alpha(60)),
+        ));
+        painter.add(egui::Shape::line(
+            stroke.clone(),
+            EStroke::new(2.0, colour(&chart, id)),
+        ));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if response.drag_stopped() || cancel || !ui.input(|i| i.pointer.any_down()) {
+            let stroke = state.sketch.take().unwrap_or_default();
+            if !cancel {
+                if let Some(back) = back {
+                    finish_sketch(s, id, &chart, &stroke, &screen, back);
+                }
+            }
+        }
+        return true;
     }
     if let Some((node, grab)) = state.dragging {
         if response.dragged() {
@@ -602,6 +648,10 @@ pub fn ui(
             (None, true) => {}
         }
     }
+    if state.draw_path && response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        return true;
+    }
     match nearest {
         Some(Grab::Tick(_)) => ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal),
         Some(_) => ui.ctx().set_cursor_icon(egui::CursorIcon::Grab),
@@ -609,6 +659,55 @@ pub fn ui(
         None => {}
     }
     true
+}
+
+/// A drawn stroke becomes the path between the two neighbouring points it
+/// starts and ends near (either way round), as one undo step.
+fn finish_sketch(
+    s: &mut Session,
+    id: NodeId,
+    chart: &Chart,
+    stroke: &[Pos2],
+    screen: &impl Fn([f32; 2]) -> Pos2,
+    back: Affine,
+) {
+    const REACH: f32 = 36.0;
+    let nearest = |p: Pos2| {
+        chart
+            .points
+            .iter()
+            .enumerate()
+            .map(|(i, q)| (i, screen(q.pos).distance(p)))
+            .filter(|(_, d)| *d <= REACH)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
+    let (Some(&first), Some(&last)) = (stroke.first(), stroke.last()) else {
+        return;
+    };
+    let ends = nearest(first).zip(nearest(last));
+    let Some((i, j)) = ends.filter(|(i, j)| i.abs_diff(*j) == 1) else {
+        s.note("Draw from one point to the next to shape the path between them.");
+        return;
+    };
+    let mut line: Vec<[f32; 2]> = stroke
+        .iter()
+        .map(|p| {
+            let (x, y) = back.apply(p.x, p.y);
+            [x, y]
+        })
+        .collect();
+    if i > j {
+        line.reverse();
+    }
+    let pid = chart.points[i.min(j)].id;
+    let mut ok = false;
+    edit(s, id, "Draw chart path", None, |c| {
+        ok = c.set_drawn(pid, &line)
+    });
+    if !ok {
+        s.note("That stroke is too short to use as a path.");
+    }
 }
 
 /// One step of a drag on chart `id`, the pointer at `to` (stage space).
@@ -982,6 +1081,7 @@ fn bar(
     place: Option<(Pos2, egui::Align2)>,
     pending: &mut bool,
     show_pose: &mut bool,
+    draw_path: &mut bool,
 ) -> Vec2 {
     let here = chart.point_on(s.frame).map(|p| p.id);
     let (pos, pivot) = place.unwrap_or((
@@ -1048,6 +1148,18 @@ fn bar(
                         );
                     } else {
                         hint(ui, &format!("Click to place frame {}", s.frame));
+                    }
+                    if !chart.locked
+                        && chart.points.len() >= 2
+                        && pill_icon(
+                            ui,
+                            symphony_ui::icons::Icon::Pencil,
+                            *draw_path,
+                            "Draw the path: drag from one point to the next (or Shift+drag)",
+                        )
+                        .clicked()
+                    {
+                        *draw_path = !*draw_path;
                     }
                     let mut done = false;
                     ui.menu_button("More", |ui| {
@@ -1265,6 +1377,15 @@ fn bar_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId, show_pose: &mut 
             };
         }
     }
+    if c.points[i].path == PathKind::Drawn
+        && ui
+            .add(egui::Button::new("Drawn").selected(true))
+            .on_hover_text("Drawn by hand. Click for the automatic curve again.")
+            .clicked()
+    {
+        c.points[i].path = PathKind::Curve;
+        c.points[i].drawn.clear();
+    }
     if pill_icon(
         ui,
         symphony_ui::icons::Icon::RotateRight,
@@ -1417,6 +1538,15 @@ pub fn point_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId) {
             &mut c.points[i].timing.ease_out,
             "Frames bunch up leaving here.",
         );
+        if c.points[i].path == PathKind::Drawn
+            && ui
+                .button("Use the automatic curve")
+                .on_hover_text(format!("The path to frame {next} is drawn by hand."))
+                .clicked()
+        {
+            c.points[i].path = PathKind::Curve;
+            c.points[i].drawn.clear();
+        }
         let p = &mut c.points[i];
         ui.horizontal(|ui| {
             widgets::checkbox(ui, &mut p.timing.hold, "Hold")
