@@ -1812,11 +1812,17 @@ impl SymphonyApp {
             });
         });
         ui.menu_button("Timing", |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Scene frame rate");
-                let mut fps = self.s.doc.settings.fps;
-                symphony_ui::widgets::frame_rate(ui, "timing-menu-fps", &mut fps);
-                self.s.set_frame_rate(fps);
+            // A submenu, not a combo box: a menu closes on any click inside
+            // it, so a combo box in a menu never opens.
+            let fps = self.s.doc.settings.fps;
+            ui.menu_button(format!("Scene frame rate ({fps} fps)"), |ui| {
+                for rate in symphony_ui::widgets::FRAME_RATES {
+                    let item = egui::Button::new(format!("{rate:.0} fps")).selected(fps == rate);
+                    if ui.add(item).clicked() {
+                        self.s.set_frame_rate(rate);
+                        ui.close();
+                    }
+                }
             });
             ui.menu_button("Insert in-betweens", |ui| {
                 let remaining = 100_000u32.saturating_sub(self.s.length());
