@@ -2790,6 +2790,16 @@ impl Session {
         matches!(self.doc.graph.node(peg)?.kind, NodeKind::Peg(_)).then_some(peg)
     }
 
+    /// The peg whose space chart `chart` is drawn and edited in: the one
+    /// following it for the selected layer, else its first follower. None
+    /// when it drives nothing (it's then on the stage).
+    pub fn chart_follower(&self, chart: NodeId) -> Option<NodeId> {
+        let followers = self.doc.graph.chart_followers(chart);
+        self.layer_peg(self.selected)
+            .filter(|peg| followers.contains(peg))
+            .or_else(|| followers.first().copied())
+    }
+
     /// The chart layer `layer` follows, if any.
     pub fn layer_chart(&self, layer: usize) -> Option<NodeId> {
         let peg = self.layer_peg(layer)?;
@@ -4789,6 +4799,60 @@ mod tests {
         assert!(!chart(&s).visible);
         s.toggle_charts_visible();
         assert!(chart(&s).visible);
+    }
+
+    /// Under a parent that moves and turns, the chart is drawn where its
+    /// follower's artwork really goes: on every frame, the chart's position
+    /// in its drawn space is where the artwork drawn at the chart's start is.
+    #[test]
+    fn a_chart_under_a_moving_parent_lines_up_with_its_artwork() {
+        use symphony_core::graph::{Node, PegParams};
+        let mut s = Session::new_scene();
+        let layer = s.doc.layers[0];
+        let mut x = Value::Constant(0.0);
+        x.set_key(1, 0.0);
+        x.set_key(9, 120.0);
+        let parent = s.doc.graph.add(
+            "Parent",
+            NodeKind::Peg(PegParams {
+                x,
+                rotation: Value::Constant(30.0),
+                ..Default::default()
+            }),
+        );
+        s.doc.graph.connect(parent, layer.peg, 0);
+        let mut nodes = crate::views::node::NodeViewState::default();
+        crate::views::node::add_from_search(&mut s, &mut nodes, crate::views::node::smart_chart());
+        let id = s.selected_node.unwrap();
+        for (f, p) in [(1, [10.0, 20.0]), (5, [60.0, -40.0]), (9, [140.0, 10.0])] {
+            s.frame = f;
+            crate::views::chart_edit::place(&mut s, id, p);
+        }
+        assert!(s.set_layer_chart(0, Some(id)));
+        assert_eq!(s.chart_follower(id), Some(layer.peg));
+        let chart = match &s.doc.graph.node(id).map(|n: &Node| &n.kind) {
+            Some(NodeKind::Chart(c)) => (**c).clone(),
+            _ => unreachable!(),
+        };
+        let curve = symphony_core::chart::ChartCurve::new(&chart);
+        let start = curve.position(1.0).unwrap();
+        for f in 1..=9 {
+            let pos = curve.position(f as f32).unwrap();
+            let drawn = s
+                .doc
+                .chart_camera_transform(Some(layer.peg), f)
+                .unwrap()
+                .apply(pos[0], pos[1]);
+            let art = s
+                .doc
+                .camera_transform(layer.node, f)
+                .unwrap()
+                .apply(start[0], start[1]);
+            assert!(
+                (drawn.0 - art.0).abs() < 1e-2 && (drawn.1 - art.1).abs() < 1e-2,
+                "frame {f}: chart at {drawn:?}, artwork at {art:?}"
+            );
+        }
     }
 
     fn line(s: &mut Session, x0: f32, x1: f32) -> Stroke {

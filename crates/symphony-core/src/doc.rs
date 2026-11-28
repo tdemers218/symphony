@@ -293,6 +293,20 @@ impl Scene {
         Some(Affine::scale(scale, scale).compose(Affine::translate(-x, -y)))
     }
 
+    /// Where a Smart Chart's coordinates land in Camera on `frame`. A chart
+    /// moves its follower in the follower's parent space, so it's drawn
+    /// there too: through `follower`'s parents (none: the stage plane).
+    pub fn chart_camera_transform(
+        &self,
+        follower: Option<NodeId>,
+        frame: u32,
+    ) -> Option<crate::math::Affine> {
+        match follower {
+            None => self.project_plane(frame, 0.0),
+            Some(peg) => self.camera_transform(peg, frame),
+        }
+    }
+
     pub fn camera_transform(&self, node: NodeId, frame: u32) -> Option<crate::math::Affine> {
         let pose = self.graph.world_pose(node, frame).ok()?;
         Some(

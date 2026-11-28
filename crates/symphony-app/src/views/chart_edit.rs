@@ -296,9 +296,10 @@ impl ChartEdit {
     }
 }
 
-/// Draw every visible chart and edit the selected one; `m` takes stage
-/// space to the screen (Camera's stage plane, or a drawing's own space in
-/// the Drawing view). Returns true while a chart takes the Transform
+/// Draw every visible chart and edit the selected one; `space` gives each
+/// chart's mapping from its own coordinates to the screen (Camera's stage
+/// plane, or a drawing's own space in the Drawing view, through the parent
+/// of the peg that follows it). Returns true while a chart takes the Transform
 /// tool's clicks (so they don't select or move artwork).
 pub fn ui(
     ui: &egui::Ui,
@@ -306,21 +307,31 @@ pub fn ui(
     painter: &egui::Painter,
     s: &mut Session,
     state: &mut ChartEdit,
-    m: Affine,
+    space: impl Fn(&Session, NodeId) -> Option<Affine>,
 ) -> bool {
     state.refresh(s);
     if state.built.is_empty() {
         state.dragging = None;
         return false;
     }
-    let screen = |p: [f32; 2]| {
-        let (x, y) = m.apply(p[0], p[1]);
-        Pos2::new(x, y)
+    let spaces: HashMap<NodeId, Affine> = state
+        .built
+        .keys()
+        .filter_map(|&id| space(s, id).map(|m| (id, m)))
+        .collect();
+    let screen_of = |id: NodeId| {
+        let m = spaces.get(&id).copied();
+        move |p: [f32; 2]| {
+            let (x, y) = m.map_or((p[0], p[1]), |m| m.apply(p[0], p[1]));
+            Pos2::new(x, y)
+        }
     };
-    let selected = s.selected_node.filter(|id| state.built.contains_key(id));
+    let selected = s
+        .selected_node
+        .filter(|id| state.built.contains_key(id) && spaces.contains_key(id));
     for (&id, b) in &state.built {
-        if Some(id) != selected && b.chart.visible {
-            draw_quiet(painter, b, colour(&b.chart, id), &screen);
+        if Some(id) != selected && b.chart.visible && spaces.contains_key(&id) {
+            draw_quiet(painter, b, colour(&b.chart, id), &screen_of(id));
         }
     }
     let editing = s.tool == Tool::Transform;
@@ -331,8 +342,13 @@ pub fn ui(
             state
                 .built
                 .iter()
-                .filter(|(id, b)| Some(**id) != selected && b.chart.visible && !b.chart.locked)
-                .find(|(_, b)| near_path(&b.path, &screen, p))
+                .filter(|(id, b)| {
+                    Some(**id) != selected
+                        && b.chart.visible
+                        && !b.chart.locked
+                        && spaces.contains_key(id)
+                })
+                .find(|(id, b)| near_path(&b.path, &screen_of(**id), p))
                 .map(|(id, _)| *id)
         });
         if let Some(id) = hit {
@@ -347,6 +363,8 @@ pub fn ui(
         state.dragging = None;
         return false;
     };
+    let m = spaces[&id];
+    let screen = screen_of(id);
     let b = &state.built[&id];
     let chart = b.chart.clone();
     // Only what's being worked on shows: a point's curve handles appear

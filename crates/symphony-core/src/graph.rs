@@ -1441,6 +1441,19 @@ impl Graph {
         Some(base.compose(Affine::rotate_deg(bone.rest_angle)))
     }
 
+    /// The pegs following chart `chart`, lowest id first.
+    pub fn chart_followers(&self, chart: NodeId) -> Vec<NodeId> {
+        let mut pegs: Vec<NodeId> = self
+            .links
+            .iter()
+            .filter(|l| l.from == chart && l.port == MOTION_PORT)
+            .map(|l| l.to)
+            .filter(|&to| matches!(self.node(to).map(|n| &n.kind), Some(NodeKind::Peg(_))))
+            .collect();
+        pegs.sort();
+        pegs
+    }
+
     /// The Smart Chart on a peg's Motion port, if it's there and enabled.
     pub fn followed_chart(&self, peg: NodeId) -> Option<(NodeId, &crate::chart::Chart)> {
         let id = self.input(peg, MOTION_PORT)?;

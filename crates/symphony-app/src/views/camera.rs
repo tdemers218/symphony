@@ -1921,26 +1921,43 @@ pub fn ui(
         super::rig_edit::draw_rest_guide(&painter, s, view);
     }
     state.select.camera_space = !drawing_only;
-    // Charts live in stage space. Camera shows the stage plane; Drawing
-    // shows the selected drawing's own space, so a chart is seen there
-    // through the inverse of where that drawing is on the stage.
-    let chart_space = if drawing_only {
-        s.doc
-            .layers
-            .get(s.selected)
-            .and_then(|layer| s.doc.graph.world_transform(layer.node, s.frame).ok())
-            .and_then(|world| world.inverse())
-            .map(|to_local| view.compose(layer_world).compose(to_local))
-    } else {
-        s.doc
-            .project_plane(s.frame, 0.0)
-            .map(|plane| view.compose(plane))
+    // A chart lives in the space its follower moves in (its parent's;
+    // the stage when it drives nothing). Camera shows that through the
+    // camera; Drawing shows the selected drawing's own space, so a chart
+    // is seen there through the inverse of where that drawing is.
+    let to_local = drawing_only
+        .then(|| {
+            s.doc
+                .layers
+                .get(s.selected)
+                .and_then(|layer| s.doc.graph.world_transform(layer.node, s.frame).ok())
+                .and_then(|world| world.inverse())
+                .map(|to_local| view.compose(layer_world).compose(to_local))
+        })
+        .flatten();
+    let chart_space = |s: &Session, chart: symphony_core::graph::NodeId| {
+        let follower = s.chart_follower(chart);
+        if drawing_only {
+            let parent = follower.map_or(Some(Affine::IDENTITY), |peg| {
+                s.doc.graph.world_transform(peg, s.frame).ok()
+            })?;
+            to_local.map(|m| m.compose(parent))
+        } else {
+            s.doc
+                .chart_camera_transform(follower, s.frame)
+                .map(|plane| view.compose(plane))
+        }
     };
     let chart_busy = !tilt_busy
         && !navigating_now
-        && chart_space.is_some_and(|space| {
-            super::chart_edit::ui(ui, &response, &painter, s, &mut state.chart_edit, space)
-        });
+        && super::chart_edit::ui(
+            ui,
+            &response,
+            &painter,
+            s,
+            &mut state.chart_edit,
+            chart_space,
+        );
     let warp_busy = !tilt_busy
         && !navigating_now
         && !chart_busy

@@ -86,7 +86,7 @@ Timing { hold, ease_out, ease_in, spacing: Vec<[t, s]> }
      The motion is `translate(pos) · rotate · scale · translate(-start)` in the peg's parent space, so artwork stays where it was drawn on the chart's first frame and turns around the chart's current point.
      Peg properties have Rotation / Scale toggles; the chart card has "<layer> follows this chart"; search has "Follow Smart Chart".
      Curves are shared through `chart::shared_curve`, keyed by chart content.
-     Open: under a moving parent the chart overlay (drawn in stage space) and the motion (parent space) differ; show it through the parent then.
+     *Done:* a chart is drawn and edited in its follower's parent space: the follower that drives the selected layer, else its first. A chart that drives nothing is on the stage. Under a parent that moves or turns, the overlay therefore lines up with the artwork on every frame (tested), and points placed on the canvas land in that space.
    - One chart can drive several consumers; contextual connections from search; curves cached per `doc.version`.
      *Done for pegs:* several pegs can follow one chart. Curves are cached by content (`chart::shared_curve`) rather than by `doc.version`, so an edit elsewhere in the scene doesn't rebuild them.
 5. **Polish.** Shortcuts, search coverage, large-project timings in `scripts/perf.sh`, user documentation, a manual workflow test (three key poses; head, torso and hand charts).
