@@ -75,6 +75,8 @@ Timing { hold, ease_out, ease_in, spacing: Vec<[t, s]> }
 3. **Advanced editing.**
    - Timing (ease out / ease in, spacing knots by sliding marks), Breakdown points, manual tangent handles, Corner / Line / Hold.
    - Scale and rotation handles on the selected point.
+     *Done:* on a point's frame, a needle points up from the point at 0°. Its round knob turns: keys rotation, the short way, and Shift snaps 15°. A square along it scales: uniform, distance = size.
+     The card has exact Rotation (720° = two turns) and Scale fields.
    - Timeline track, retiming with insert and delete frames, copy and paste points, shift the whole chart in time.
      *Done:* drag a chart's span on its Timeline track to move it in time (`Chart::shift_frames`, never before frame 1, one undo step).
      While a chart is edited (selected, Transform), Copy / Cut / Paste / Delete act on its point on the current frame. Copy between points takes where the chart is.

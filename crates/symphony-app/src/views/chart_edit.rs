@@ -65,6 +65,62 @@ enum Grab {
     /// A frame's tick: sliding it along the path sets that frame's
     /// spacing.
     Tick(u32),
+    /// The point's turn knob: keys the chart's rotation on its frame.
+    Turn(PointId),
+    /// The point's size square: keys the chart's scale on its frame.
+    Size(PointId),
+}
+
+/// Screen length of the turn needle, and of the needle to the size
+/// square at 100%.
+const NEEDLE: f32 = 56.0;
+const SIZE_BASE: f32 = 30.0;
+
+/// Rotation and scale on the canvas for the point on this frame: a needle
+/// from the point at the chart's angle, a round knob at its end to turn,
+/// and a square along it whose distance is the size.
+struct Pose {
+    pid: PointId,
+    frame: u32,
+    at: Pos2,
+    dir: Vec2,
+    /// The stage angle (degrees) the needle has at 0°: straight up on
+    /// screen, clear of a path that mostly runs sideways.
+    base: f32,
+    scale: f32,
+}
+
+impl Pose {
+    fn new(
+        chart: &Chart,
+        curve: &ChartCurve,
+        frame: u32,
+        screen: &impl Fn([f32; 2]) -> Pos2,
+    ) -> Option<Self> {
+        let p = chart.point_on(frame)?;
+        let m = curve.sample(frame as f32)?;
+        let at = screen(p.pos);
+        let up = |sign: f32| (screen([p.pos[0], p.pos[1] + sign]) - at).y;
+        let base: f32 = if up(1.0) < up(-1.0) { 90.0 } else { -90.0 };
+        let (sin, cos) = (base + m.rotation).to_radians().sin_cos();
+        let dir = (screen([p.pos[0] + cos, p.pos[1] + sin]) - at).normalized();
+        Some(Pose {
+            pid: p.id,
+            frame,
+            at,
+            dir: if dir.is_finite() { dir } else { -Vec2::Y },
+            base,
+            scale: m.scale[0],
+        })
+    }
+
+    fn knob(&self) -> Pos2 {
+        self.at + self.dir * NEEDLE
+    }
+
+    fn size(&self) -> Pos2 {
+        self.at + self.dir * (SIZE_BASE * self.scale).clamp(10.0, NEEDLE - 12.0)
+    }
 }
 
 #[derive(Default)]
@@ -238,6 +294,9 @@ pub fn ui(
     } else {
         Vec::new()
     };
+    let pose = (editing && !chart.locked)
+        .then(|| Pose::new(&chart, &b.curve, s.frame, &screen))
+        .flatten();
     // Points first, then handles, then ticks: the nearest of the first
     // kind within reach.
     let grab_at = |p: Pos2| {
@@ -260,6 +319,17 @@ pub fn ui(
                 &mut handles
                     .iter()
                     .map(|&(pid, after, _, h)| (Grab::Handle(pid, after), screen(h))),
+                GRAB,
+            )
+        })
+        .or_else(|| {
+            let pose = pose.as_ref()?;
+            near(
+                &mut [
+                    (Grab::Turn(pose.pid), pose.knob()),
+                    (Grab::Size(pose.pid), pose.size()),
+                ]
+                .into_iter(),
                 GRAB,
             )
         })
@@ -289,6 +359,9 @@ pub fn ui(
         active,
         &handles,
     );
+    if let Some(pose) = &pose {
+        draw_pose(painter, pose, colour(&chart, id), active);
+    }
     if !editing {
         state.dragging = None;
         return false;
@@ -309,8 +382,38 @@ pub fn ui(
         if response.dragged() {
             if let (Some(p), Some(back)) = (response.interact_pointer_pos(), back) {
                 let (x, y) = back.apply(p.x, p.y);
-                let alt = ui.input(|i| i.modifiers.alt);
-                drag(s, node, grab, [x, y], alt, &state.built[&node].curve);
+                let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+                match (grab, &pose) {
+                    (Grab::Turn(_), Some(pose)) => {
+                        let pos = chart.point(pose.pid).map_or([x, y], |q| q.pos);
+                        let mut degrees = (y - pos[1]).atan2(x - pos[0]).to_degrees() - pose.base;
+                        if shift {
+                            degrees = (degrees / 15.0).round() * 15.0;
+                        }
+                        let frame = pose.frame;
+                        edit(
+                            s,
+                            node,
+                            "Turn chart",
+                            Some(format!("chart-turn-{}-{frame}", node.0)),
+                            |c| c.set_rotation(frame, degrees),
+                        );
+                    }
+                    (Grab::Size(_), Some(pose)) => {
+                        let along = (p - pose.at).dot(pose.dir) / SIZE_BASE;
+                        let size = along.clamp(0.05, 20.0);
+                        let frame = pose.frame;
+                        edit(
+                            s,
+                            node,
+                            "Scale chart",
+                            Some(format!("chart-scale-{}-{frame}", node.0)),
+                            |c| c.set_scale(frame, [size, size]),
+                        );
+                    }
+                    (Grab::Turn(_) | Grab::Size(_), None) => {}
+                    _ => drag(s, node, grab, [x, y], alt, &state.built[&node].curve),
+                }
             }
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
@@ -332,7 +435,7 @@ pub fn ui(
                 }
             }
             (Some(Grab::Tick(frame)), _) => s.frame = frame,
-            (Some(Grab::Handle(..)), _) => {}
+            (Some(Grab::Handle(..) | Grab::Turn(_) | Grab::Size(_)), _) => {}
             (None, false) => {
                 if let (Some(p), Some(back)) = (pointer, back) {
                     let (x, y) = back.apply(p.x, p.y);
@@ -373,6 +476,8 @@ fn drag(s: &mut Session, id: NodeId, grab: Grab, to: [f32; 2], alt: bool, curve:
             Some(format!("chart-handle-{}-{}", id.0, pid.0)),
             |c| move_handle(c, pid, after, to, alt),
         ),
+        // Measured on screen, in `ui`.
+        Grab::Turn(_) | Grab::Size(_) => {}
         Grab::Tick(frame) => {
             let Some(d) = curve.segment_distance(frame, to) else {
                 return;
@@ -505,6 +610,24 @@ fn draw_quiet(
 
 /// The selected chart in full: path, a tick per frame, points with their
 /// frame numbers, and where it is now.
+/// The needle, turn knob and size square of the point on this frame.
+fn draw_pose(painter: &egui::Painter, pose: &Pose, colour: Color32, active: Option<Grab>) {
+    let edge = EStroke::new(3.0, theme::BG_BASE.gamma_multiply(0.6));
+    painter.line_segment([pose.at, pose.knob()], edge);
+    painter.line_segment([pose.at, pose.knob()], EStroke::new(1.0, colour));
+    let hot = |g: Grab| active == Some(g);
+    let r = if hot(Grab::Turn(pose.pid)) { 6.5 } else { 5.0 };
+    painter.circle(pose.knob(), r, Color32::WHITE, EStroke::new(1.5, colour));
+    let half = if hot(Grab::Size(pose.pid)) { 5.0 } else { 4.0 };
+    painter.rect(
+        egui::Rect::from_center_size(pose.size(), Vec2::splat(half * 2.0)),
+        1.0,
+        colour,
+        EStroke::new(1.5, Color32::WHITE),
+        egui::StrokeKind::Inside,
+    );
+}
+
 fn draw_selected(
     painter: &egui::Painter,
     b: &Built,
@@ -826,6 +949,34 @@ fn point_controls(ui: &mut egui::Ui, c: &mut Chart, pid: PointId) {
             }
         });
     }
+    // The chart's turn and size on this point's frame, typed exactly
+    // (720° is two turns).
+    let frame = c.points[i].frame;
+    ui.horizontal(|ui| {
+        ui.label("Rotation");
+        let mut turn = c.rotation.at(frame);
+        if ui
+            .add(egui::DragValue::new(&mut turn).speed(1.0).suffix("°"))
+            .on_hover_text("Rotation on this frame. Drag the round knob on the canvas.")
+            .changed()
+        {
+            c.set_rotation_turns(frame, turn);
+        }
+        ui.label("Scale");
+        let mut size = c.scale[0].at(frame) * 100.0;
+        if ui
+            .add(
+                egui::DragValue::new(&mut size)
+                    .speed(1.0)
+                    .range(5.0..=2000.0)
+                    .suffix("%"),
+            )
+            .on_hover_text("Scale on this frame. Drag the square on the canvas.")
+            .changed()
+        {
+            c.set_scale(frame, [size / 100.0, size / 100.0]);
+        }
+    });
 }
 
 #[cfg(test)]

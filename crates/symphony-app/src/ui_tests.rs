@@ -2581,4 +2581,43 @@ fn a_smart_chart_is_placed_and_dragged_on_the_canvas() {
         (tick[0] - back[0]).hypot(tick[1] - back[1]),
     );
     assert!(d_now < d_back * 0.3, "frame 5 slid back: {now:?}");
+    // On frame 9, turn the knob to point down the stage's +y axis (90°),
+    // then pull the size square out to twice its length (200%).
+    h.state_mut().s.frame = 9;
+    h.run_steps(2);
+    let drag = |h: &mut Harness<'static, Rig>, start: egui::Pos2, end: egui::Pos2| {
+        h.input_mut()
+            .events
+            .extend([egui::Event::PointerMoved(start), button(start, true)]);
+        h.step();
+        for i in 1..=6 {
+            let p = start + (end - start) * (i as f32 / 6.0);
+            h.input_mut().events.push(egui::Event::PointerMoved(p));
+            h.step();
+        }
+        h.input_mut().events.push(button(end, false));
+        h.run_steps(2);
+    };
+    let at = h.state().canvas.to_screen(200.0, 100.0);
+    let along = |h: &Harness<'static, Rig>, x: f32, y: f32| {
+        (h.state().canvas.to_screen(200.0 + x, 100.0 + y) - at).normalized()
+    };
+    // At 0° the needle points up on screen; 90° turns it a quarter.
+    let (plus, minus) = (along(&h, 0.0, 1.0), along(&h, 0.0, -1.0));
+    let (up, side) = if plus.y < minus.y {
+        (plus, along(&h, -1.0, 0.0))
+    } else {
+        (minus, along(&h, 1.0, 0.0))
+    };
+    drag(&mut h, at + up * 56.0, at + side * 56.0);
+    let turned = chart(&h).rotation.at(9);
+    assert!((turned - 90.0).abs() < 2.0, "turned to {turned}");
+    drag(&mut h, at + side * 30.0, at + side * 60.0);
+    let scale = chart(&h).scale[0].at(9);
+    assert!((scale - 2.0).abs() < 0.1, "scaled to {scale}");
+    assert_eq!(
+        chart(&h).points.len(),
+        2,
+        "turning and scaling add no point"
+    );
 }
