@@ -1,5 +1,6 @@
 //! Raster effects operate on premultiplied RGBA so transparent edges stay clean.
 
+use symphony_core::colour;
 use symphony_core::graph::{BlendMode, BlurMode, Effect, Gradient};
 use tiny_skia::Pixmap;
 
@@ -171,125 +172,12 @@ pub fn blend(dst: &mut Pixmap, src: &Pixmap, mode: BlendMode, amount: f32) {
         };
         let cs = unp(sp, a_s);
         let cb = unp(b, a_b);
-        let mixed = mix(mode, cb, cs);
-        let a_o = a_s + a_b - a_s * a_b;
+        let (co, a_o) = colour::composite(mode, cb, a_b, cs, a_s);
         for i in 0..3 {
-            let co = cs[i] * a_s * (1.0 - a_b) + cb[i] * a_b * (1.0 - a_s) + a_s * a_b * mixed[i];
-            b[i] = (co * 255.0).round().clamp(0.0, 255.0) as u8;
+            b[i] = (co[i] * 255.0).round().clamp(0.0, 255.0) as u8;
         }
         b[3] = (a_o * 255.0).round().clamp(0.0, 255.0) as u8;
     }
-}
-
-/// The blend function B(backdrop, source) on straight colours.
-fn mix(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
-    let sep = |f: fn(f32, f32) -> f32| [f(cb[0], cs[0]), f(cb[1], cs[1]), f(cb[2], cs[2])];
-    match mode {
-        BlendMode::Normal => cs,
-        BlendMode::Multiply => sep(|b, s| b * s),
-        BlendMode::Screen => sep(screen),
-        BlendMode::Overlay => sep(|b, s| hard_light(s, b)),
-        BlendMode::Darken => sep(f32::min),
-        BlendMode::Lighten => sep(f32::max),
-        BlendMode::ColorDodge => sep(|b, s| {
-            if b <= 0.0 {
-                0.0
-            } else if s >= 1.0 {
-                1.0
-            } else {
-                (b / (1.0 - s)).min(1.0)
-            }
-        }),
-        BlendMode::ColorBurn => sep(|b, s| {
-            if b >= 1.0 {
-                1.0
-            } else if s <= 0.0 {
-                0.0
-            } else {
-                1.0 - ((1.0 - b) / s).min(1.0)
-            }
-        }),
-        BlendMode::LinearBurn => sep(|b, s| (b + s - 1.0).max(0.0)),
-        BlendMode::Add => sep(|b, s| (b + s).min(1.0)),
-        BlendMode::Subtract => sep(|b, s| (b - s).max(0.0)),
-        BlendMode::Divide => sep(|b, s| {
-            if s <= 0.0 {
-                if b <= 0.0 {
-                    0.0
-                } else {
-                    1.0
-                }
-            } else {
-                (b / s).min(1.0)
-            }
-        }),
-        BlendMode::Difference => sep(|b, s| (b - s).abs()),
-        BlendMode::Exclusion => sep(|b, s| b + s - 2.0 * b * s),
-        BlendMode::HardLight => sep(hard_light),
-        BlendMode::SoftLight => sep(|b, s| {
-            if s <= 0.5 {
-                b - (1.0 - 2.0 * s) * b * (1.0 - b)
-            } else {
-                let d = if b <= 0.25 {
-                    ((16.0 * b - 12.0) * b + 4.0) * b
-                } else {
-                    b.sqrt()
-                };
-                b + (2.0 * s - 1.0) * (d - b)
-            }
-        }),
-        BlendMode::Hue => set_lum(set_sat(cs, sat(cb)), lum(cb)),
-        BlendMode::Saturation => set_lum(set_sat(cb, sat(cs)), lum(cb)),
-        BlendMode::Color => set_lum(cs, lum(cb)),
-        BlendMode::Luminosity => set_lum(cb, lum(cs)),
-    }
-}
-
-fn screen(b: f32, s: f32) -> f32 {
-    b + s - b * s
-}
-
-fn hard_light(b: f32, s: f32) -> f32 {
-    if s <= 0.5 {
-        b * 2.0 * s
-    } else {
-        screen(b, 2.0 * s - 1.0)
-    }
-}
-
-fn lum(c: [f32; 3]) -> f32 {
-    0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
-}
-
-fn clip_color(c: [f32; 3]) -> [f32; 3] {
-    let l = lum(c);
-    let n = c[0].min(c[1]).min(c[2]);
-    let x = c[0].max(c[1]).max(c[2]);
-    let mut c = c;
-    if n < 0.0 && l - n > 1e-6 {
-        c = c.map(|v| l + (v - l) * l / (l - n));
-    }
-    if x > 1.0 && x - l > 1e-6 {
-        c = c.map(|v| l + (v - l) * (1.0 - l) / (x - l));
-    }
-    c.map(|v| v.clamp(0.0, 1.0))
-}
-
-fn set_lum(c: [f32; 3], l: f32) -> [f32; 3] {
-    let d = l - lum(c);
-    clip_color(c.map(|v| v + d))
-}
-
-fn sat(c: [f32; 3]) -> f32 {
-    c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])
-}
-
-fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
-    let (max, min) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
-    if max - min <= 1e-6 {
-        return [0.0; 3];
-    }
-    c.map(|v| (v - min) * s / (max - min))
 }
 
 fn box_pass(
