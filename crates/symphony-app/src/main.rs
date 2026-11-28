@@ -318,6 +318,7 @@ struct SymphonyApp {
     node_view: node::NodeViewState,
     manual: views::manual::ManualState,
     colour_lab: views::colour_lab::LabState,
+    quick_colour: views::colour_picker::Quick,
     timing: timing::TimingState,
     export: export::ExportDialog,
     maximised: Option<View>,
@@ -1105,6 +1106,7 @@ impl SymphonyApp {
             node_view: Default::default(),
             manual: Default::default(),
             colour_lab: Default::default(),
+            quick_colour: Default::default(),
             timing: Default::default(),
             export: Default::default(),
             maximised: None,
@@ -1612,6 +1614,7 @@ impl SymphonyApp {
                 self.camera.apply_at(action, pointer);
                 self.drawing.apply_at(action, pointer);
             }
+            Action::ColourPicker => self.quick_colour.toggle(ctx),
             Action::Search => {
                 // Tab opens Search near the pointer. Text fields keep their focus handling.
                 if !ctx.text_edit_focused() && self.palette.is_none() {
@@ -5370,6 +5373,8 @@ impl SymphonyApp {
             });
         self.show_licences = open;
         self.file_drops(&ctx);
+        self.quick_colour.ui(&ctx, &mut self.s);
+        views::colour_picker::dropper::update(&ctx);
         // "Colour Lab…" in a colour editor.
         if let Some(rgb) =
             ctx.data_mut(|d| d.remove_temp::<[u8; 3]>(views::colour_lab::open_request()))
@@ -5395,9 +5400,12 @@ impl SymphonyApp {
                 .ok()
                 .and_then(|v| v.parse::<u8>().ok())
             {
+                let quick = std::env::var_os("SYMPHONY_SHOT_QUICK").is_some();
                 ctx.data_mut(|d| {
-                    d.insert_persisted(egui::Id::unique("colour-editor-layout"), layout);
-                    d.insert_temp(egui::Id::unique("shot-open-colour-editor"), true);
+                    d.insert_persisted(views::colour_picker::layout_id(), layout);
+                    if !quick {
+                        d.insert_temp(egui::Id::unique("shot-open-colour-editor"), true);
+                    }
                 });
             }
             // SYMPHONY_SHOT_LAB=<x>,<y>: the Colour Lab with that pixel picked.
@@ -5410,6 +5418,10 @@ impl SymphonyApp {
                 .and_then(|(x, y)| Some((x?, y?)))
             {
                 self.colour_lab.pick([x, y]);
+            }
+            // SYMPHONY_SHOT_QUICK: the quick colour picker (Q) open.
+            if std::env::var_os("SYMPHONY_SHOT_QUICK").is_some() && !self.quick_colour.is_open() {
+                self.quick_colour.toggle(&ctx);
             }
             // SYMPHONY_SHOT_SWATCH=<index>: the current colour.
             if let Some(sw) = std::env::var("SYMPHONY_SHOT_SWATCH")

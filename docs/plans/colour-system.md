@@ -145,6 +145,17 @@ Each step is one or more commits with tests and a manual update (E11.6).
 - Colour view **List / Swatches** switch, matching Harmony's List and
   Swatch modes. Swatches is a grid of squares with the name on hover.
 
+### Level 1 picker, conventional layout ✅ (Tristan, 2026-11-28)
+Tristan: the first layouts weren't what artists know. The editor now
+follows the common art-app pattern: **Wheel** (hue ring around a
+saturation/brightness square, as in Clip Studio, Krita and SAI) by
+default, **Square** (Photoshop's big square and hue bar), and
+Perceptual. Under it: a new/current split chip, a hex field, a dropper
+that samples the window (via a screenshot), HSB/RGB sliders and recent
+colours. The blend preview moved into a closed section. **Q** (Symphony
+profile) summons the same editor for the current colour at the pointer.
+Shadow/highlight suggestions are still to come.
+
 ### Phase 1: foundation ✅ c4966f8, 241b6d2
 1. `colour.rs`: sRGB ⇄ linear ⇄ OKLab/OKLCH, gamut mapping, tests
    (round-trips, known reference values, gamut edge).

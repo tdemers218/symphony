@@ -67,6 +67,7 @@ Symphony also keeps a few keys that every tool understands:
 | Smart Chart: even spacing | – | – |
 | Stop following Smart Chart | – | – |
 | Show or hide Smart Charts | – | – |
+| Colour picker | `Q` | – |
 
 ## Drawing, Camera and Node
 

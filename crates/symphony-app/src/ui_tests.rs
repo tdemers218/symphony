@@ -2967,3 +2967,51 @@ fn the_colour_lab_renders_and_explains_a_picked_shadow() {
     let count = h.state().s.doc.palette.swatches.len();
     assert_eq!(count, Session::new_scene().doc.palette.swatches.len() + 1);
 }
+
+#[test]
+fn the_quick_colour_picker_edits_the_current_colour_and_escape_closes_it() {
+    use crate::views::colour_picker::Quick;
+    struct Q {
+        s: Session,
+        quick: Quick,
+    }
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(900.0, 800.0))
+        .build_ui_state(
+            |ui, q: &mut Q| {
+                let ctx = ui.ctx().clone();
+                q.quick.ui(&ctx, &mut q.s);
+            },
+            Q {
+                s: Session::new_scene(),
+                quick: Quick::default(),
+            },
+        );
+    let ctx = h.ctx.clone();
+    h.state_mut().quick.toggle(&ctx);
+    h.run_steps(2);
+    assert!(h.state().quick.is_open());
+    let before = h.state().s.doc.swatch_rgba(h.state().s.swatch);
+    // Type a hex colour.
+    let [r, g, b, _] = before;
+    let field = format!("#{r:02X}{g:02X}{b:02X}");
+    h.get_all_by_value(&field)
+        .next()
+        .expect("hex field")
+        .click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_all_by_value(&field)
+        .next()
+        .expect("hex field")
+        .type_text("#FF8000");
+    h.run_steps(2);
+    let after = h.state().s.doc.swatch_rgba(h.state().s.swatch);
+    assert_eq!(after, [255, 128, 0, before[3]]);
+    // Escape leaves the field first, then closes the picker.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().quick.is_open());
+}

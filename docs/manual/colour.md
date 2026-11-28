@@ -29,21 +29,41 @@ your choice.
 
 Changes apply as you make them, to everything painted with the swatch.
 
-- **Square** and **Triangle** pick saturation and brightness for a **Hue**.
-- **Perceptual** picks **Lightness** (up) and **Chroma** (right) for a hue
-  (the OKLCH colour model). Equal steps look like equal changes, and
-  making a colour lighter or darker keeps its hue, which Square and
-  Triangle don't. The shape's right edge is the most colourful your
-  screen can show at that hue; clicking past it picks the edge.
-- **Before · Now** shows the colour the editor opened with next to the
-  current one. Click **Before** to go back to it.
-- **Opacity** is the paint's own transparency.
-- The square at the bottom previews the paint as it will look: over
-  white, mid grey or near black, with a layer **Blend** mode, at the
-  colour's opacity. It uses the same maths as the render.
+- **Wheel** (the default): drag the ring to choose the hue, and the square
+  inside it for saturation (left to right) and brightness (bottom to
+  top).
+- **Square**: a larger square with the hue bar beside it.
+- **Perceptual**: **Lightness** (up) and **Chroma** (right) for a hue,
+  in the OKLCH colour model. Equal steps look like equal changes, and
+  making a colour lighter or darker keeps its hue. The shape's right edge
+  is the most colourful your screen can show at that hue; clicking past
+  it picks the edge.
 
-Symphony remembers the layout you used last. **Colour Lab…** at the
-bottom opens the [Colour Lab](#colour-lab) on this colour.
+Under the picker:
+
+- The split chip shows the new colour on the left and the colour you
+  started with on the right. Click the right half to go back.
+- The hex field shows the colour as `#RRGGBB`. Type or paste one;
+  `#rgb` works too.
+- The dropper button picks a colour from anywhere in the window: click
+  it, then click a pixel. `Escape` cancels.
+- **HSB** or **RGB** sliders, with exact values to type.
+- **Opacity** is the paint's own transparency.
+- The row of small chips is your recent colours. Click one to use it.
+- **Colour Lab…** opens the [Colour Lab](#colour-lab) on this colour.
+- **Preview with a blend mode** shows the paint over white, mid grey or
+  near black, with a layer **Blend** mode, at the colour's opacity. It
+  uses the same maths as the render.
+
+Symphony remembers the layout and the slider type you used last.
+
+### Quick colour picker
+
+Press `Q` (Symphony profile) to open the editor for the current colour
+right at the pointer, without going to the Colour view. Press `Q` again,
+press `Escape` or click outside to close it; the click that closes it
+doesn't draw. In the Harmony profile it has no shortcut: search (`Tab`)
+for "Colour picker", or give it one.
 
 ### Three kinds of opacity
 

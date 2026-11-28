@@ -137,11 +137,13 @@ pub enum Action {
     ChartEvenSpacing,
     ChartUnfollow,
     ChartsVisible,
+    /// The quick colour picker for the current colour, at the pointer.
+    ColourPicker,
     Timeline(TimelineAction),
 }
 
 impl Action {
-    pub const ALL: [Action; 106] = [
+    pub const ALL: [Action; 107] = [
         Action::NewScene,
         Action::Open,
         Action::Save,
@@ -239,6 +241,7 @@ impl Action {
         Action::ChartEvenSpacing,
         Action::ChartUnfollow,
         Action::ChartsVisible,
+        Action::ColourPicker,
         Action::Timeline(TimelineAction::SetKey),
         Action::Timeline(TimelineAction::DeleteKey),
         Action::Timeline(TimelineAction::InsertNew),
@@ -350,6 +353,7 @@ impl Action {
             Action::ChartEvenSpacing => "chart.even_spacing",
             Action::ChartUnfollow => "chart.unfollow",
             Action::ChartsVisible => "chart.visibility",
+            Action::ColourPicker => "colour.quick_picker",
             Action::Timeline(action) => action.id(),
         }
     }
@@ -453,6 +457,7 @@ impl Action {
             Action::ChartEvenSpacing => "Smart Chart: even spacing",
             Action::ChartUnfollow => "Stop following Smart Chart",
             Action::ChartsVisible => "Show or hide Smart Charts",
+            Action::ColourPicker => "Colour picker",
             Action::Timeline(action) => action.label(),
         }
     }
@@ -608,6 +613,8 @@ fn harmony(action: Action) -> Option<Binding> {
         | Action::ChartEvenSpacing
         | Action::ChartUnfollow
         | Action::ChartsVisible => None,
+        // Harmony has no such popup; find it with Search.
+        Action::ColourPicker => None,
     }
 }
 
@@ -659,6 +666,7 @@ fn symphony(action: Action) -> Option<Binding> {
         Action::ChartHold => b(Key::H, SHIFT),
         Action::ChartEarlier => b(Key::OpenBracket, NONE),
         Action::ChartLater => b(Key::CloseBracket, NONE),
+        Action::ColourPicker => b(Key::Q, NONE),
         _ => harmony(action),
     }
 }

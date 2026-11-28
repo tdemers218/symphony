@@ -1163,7 +1163,6 @@ pub fn colour(ui: &mut egui::Ui, s: &mut Session) {
                     ui.data_mut(|d| d.insert_temp(removal, (s.swatch, other.id)));
                 }
             }
-            ui.label(&s.doc.palette.name);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Right to left, so listed last to first.
                 widgets::segmented(
@@ -1173,6 +1172,10 @@ pub fn colour(ui: &mut egui::Ui, s: &mut Session) {
                     &[(true, "Swatches"), (false, "List")],
                     false,
                 );
+                // The palette's name takes what's left, cut short if need be.
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(&s.doc.palette.name).truncate());
+                });
             });
         });
         ui.data_mut(|d| d.insert_persisted(mode, tiles));
