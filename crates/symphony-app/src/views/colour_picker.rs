@@ -220,16 +220,18 @@ pub fn body(ui: &mut egui::Ui, id: egui::Id, rgba: &mut [u8; 4], edit_opacity: b
         channel_sliders(ui, id, &mut next);
     }
     if edit_opacity {
-        let mut opacity = f32::from(next[3]) / 255.0 * 100.0;
+        let shown = f32::from(next[3]) / 255.0 * 100.0;
+        let mut opacity = shown;
         if symphony_ui::widgets::precise_slider(
             ui,
             egui::Slider::new(&mut opacity, 0.0..=100.0)
-                .step_by(1.0)
+                .clamping(egui::SliderClamping::Edits)
                 .fixed_decimals(0)
                 .text("Opacity")
                 .suffix("%"),
         )
         .changed()
+            && (opacity - shown).abs() > 1e-3
         {
             next[3] = (opacity / 100.0 * 255.0).round() as u8;
         }
@@ -572,16 +574,21 @@ fn channel_sliders(ui: &mut egui::Ui, id: egui::Id, rgba: &mut [u8; 4]) {
     );
     ui.data_mut(|d| d.insert_persisted(mode_id, rgb_mode));
     ui.spacing_mut().slider_width = PICKER - 92.0;
+    // Clamping only on edits: with the default, egui re-rounds the value
+    // to the shown decimals every frame and reports it as a change, which
+    // nudged the colour just by opening the editor. Only a real move counts.
     let slider = |ui: &mut egui::Ui, value: &mut f32, max: f32, name: &str, suffix: &str| {
+        let before = *value;
         symphony_ui::widgets::precise_slider(
             ui,
             egui::Slider::new(value, 0.0..=max)
-                .step_by(1.0)
+                .clamping(egui::SliderClamping::Edits)
                 .fixed_decimals(0)
                 .suffix(suffix)
                 .text(name),
         )
         .changed()
+            && (*value - before).abs() > 1e-3
     };
     if rgb_mode {
         let mut c = rgba.map(f32::from);
@@ -590,7 +597,12 @@ fn channel_sliders(ui: &mut egui::Ui, id: egui::Id, rgba: &mut [u8; 4]) {
             changed |= slider(ui, &mut c[i], 255.0, name, "");
         }
         if changed {
-            *rgba = [c[0] as u8, c[1] as u8, c[2] as u8, rgba[3]];
+            *rgba = [
+                c[0].round() as u8,
+                c[1].round() as u8,
+                c[2].round() as u8,
+                rgba[3],
+            ];
         }
     } else {
         let hsv = hsv_of(ui, id, *rgba);
@@ -716,25 +728,33 @@ fn perceptual(ui: &mut egui::Ui, id: egui::Id, rgba: &mut [u8; 4]) {
         symphony_ui::widgets::precise_slider(
             ui,
             egui::Slider::new(&mut lightness, 0.0..=100.0)
-                .step_by(0.5)
+                .clamping(egui::SliderClamping::Edits)
+                .fixed_decimals(0)
                 .text("Lightness")
                 .suffix("%"),
         ),
         symphony_ui::widgets::precise_slider(
             ui,
             egui::Slider::new(&mut chroma, 0.0..=MAX_CHROMA)
-                .step_by(0.001)
+                .clamping(egui::SliderClamping::Edits)
+                .fixed_decimals(3)
                 .text("Chroma"),
         ),
         symphony_ui::widgets::precise_slider(
             ui,
             egui::Slider::new(&mut hue, 0.0..=360.0)
-                .step_by(1.0)
+                .clamping(egui::SliderClamping::Edits)
+                .fixed_decimals(0)
                 .text("Hue")
                 .suffix("°"),
         ),
     ];
-    if sliders.iter().any(egui::Response::changed) {
+    // Only a real move counts: a slider that merely tidies the value it
+    // shows must not shift the colour.
+    let moved = (lightness - lch.l * 100.0).abs() > 1e-4
+        || (chroma - lch.c).abs() > 1e-6
+        || (hue - lch.h).abs() > 1e-4;
+    if moved && sliders.iter().any(egui::Response::changed) {
         lch = Oklch {
             l: lightness / 100.0,
             c: chroma,

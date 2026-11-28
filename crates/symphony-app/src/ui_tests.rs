@@ -3015,3 +3015,37 @@ fn the_quick_colour_picker_edits_the_current_colour_and_escape_closes_it() {
     h.run_steps(2);
     assert!(!h.state().quick.is_open());
 }
+
+#[test]
+fn opening_the_colour_editor_never_changes_the_colour() {
+    use crate::views::colour_picker::{layout_id, Quick};
+    for layout in 0u8..3 {
+        for rgb_sliders in [false, true] {
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(900.0, 800.0))
+                .build_ui_state(
+                    move |ui, (s, quick): &mut (Session, Quick)| {
+                        ui.data_mut(|d| {
+                            d.insert_persisted(layout_id(), layout);
+                            d.insert_persisted(egui::Id::unique("colour-editor-rgb"), rgb_sliders);
+                        });
+                        let ctx = ui.ctx().clone();
+                        quick.ui(&ctx, s);
+                    },
+                    (Session::new_scene(), Quick::default()),
+                );
+            let ctx = h.ctx.clone();
+            // An awkward colour: not on any whole step of H, S, B, L, C or %.
+            let id = h.state().0.swatch;
+            h.state_mut().0.set_swatch(id, [63, 112, 221, 130]);
+            let before = h.state().0.doc.swatch_rgba(id);
+            h.state_mut().1.toggle(&ctx);
+            h.run_steps(4);
+            assert_eq!(
+                h.state().0.doc.swatch_rgba(id),
+                before,
+                "layout {layout}, rgb {rgb_sliders}"
+            );
+        }
+    }
+}
